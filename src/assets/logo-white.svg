@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">
+  <path d="M12 2c-4.97 0-9 4.03-9 9v2c0 4.97 4.03 9 9 9s9-4.03 9-9v-2c0-4.97-4.03-9-9-9zm0 2c3.87 0 7 3.13 7 7v2c0 3.87-3.13 7-7 7s-7-3.13-7-7v-2c0-3.87 3.13-7 7-7zm-3 6v6h2v-6H9zm4 0v6h2v-6h-2z"/>
+  <text x="50%" y="50%" text-anchor="middle" fill="white" font-family="AlteHaasGrotesk" font-size="14">EspressoLane</text>
+</svg> 
