@@ -1,31 +1,178 @@
-import React, { useState, useEffect } from 'react';
-import { OrderItem } from '../types'; // Import OrderItem from types.ts
+import React, { useState, useEffect, useCallback } from 'react';
+import { OrderItem, User } from '../types'; // Import OrderItem and User
 
+// Define props for the Order component
 interface OrderPageProps {
-  orders: OrderItem[];
-  updateOrderStatus: (orderId: string, newStatus: OrderItem['status']) => void;
+  user: User | null; // Add user prop definition
 }
 
-const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
+const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
+  const [localOrders, setLocalOrders] = useState<OrderItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // --- Moved fetchOrders outside useEffect and wrapped in useCallback ---
+  const fetchOrders = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const token = localStorage.getItem('authToken'); 
+      const response = await fetch('http://localhost:3001/api/orders', {
+         headers: {
+           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+         },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data: OrderItem[] = await response.json();
+      setLocalOrders(data);
+    } catch (fetchError: any) {
+      console.error("Failed to fetch orders:", fetchError);
+      setError(`Failed to load orders: ${fetchError.message}`);
+      setLocalOrders([]);
+    } finally {
+      setIsLoading(false);
+    }
+    // Add state setters to dependency array
+  }, [setIsLoading, setError, setLocalOrders]);
+
+  // Debounce search input
   useEffect(() => {
     const timerId = setTimeout(() => {
       setSearchQuery(inputValue);
-    }, 500); // 500ms delay
-
-    return () => {
-      clearTimeout(timerId);
-    };
+      // Optionally trigger a re-fetch here if filtering is done backend-side
+      // fetchOrders(inputValue);
+    }, 500);
+    return () => clearTimeout(timerId);
   }, [inputValue]);
 
-  // Filter orders based on search query (example: by ticketNumber or customerName)
-  const filteredOrders = orders.filter(order => 
+  // Fetch Orders on Mount - Now calls the memoized fetchOrders
+  useEffect(() => {
+    fetchOrders();
+    // Add fetchOrders to dependency array
+  }, [fetchOrders]);
+
+  // Client-side filtering (update to use localOrders)
+  // Consider backend filtering for better performance
+  const filteredOrders = localOrders.filter(order =>
     order.ticketNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
     order.customerName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // --- New function to handle status updates via API ---
+  const handleUpdateStatus = async (orderId: string, newStatus: OrderItem['status']) => {
+    // Find the order to potentially update optimistically
+    const originalOrder = localOrders.find(o => o.id === orderId);
+    if (!originalOrder) return;
+
+    // Optimistic UI Update (optional but improves perceived performance)
+    setLocalOrders(prevOrders =>
+      prevOrders.map(order =>
+        order.id === orderId ? { ...order, status: newStatus } : order
+      )
+    );
+
+    try {
+      // TODO: Replace with actual API call including JWT
+      const token = localStorage.getItem('authToken'); // Placeholder
+      const response = await fetch(`http://localhost:3001/api/orders/${orderId}/status`, { // Example endpoint
+        method: 'PATCH', // Or PUT
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
+
+      if (!response.ok) {
+        // Revert optimistic update on failure
+        setLocalOrders(prevOrders =>
+           prevOrders.map(order =>
+             order.id === orderId ? originalOrder : order // Restore original order
+           )
+        );
+        const errorData = await response.json().catch(() => ({ message: 'Server error updating status.'}));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      // Optional: If the backend returns the updated order, update state with it
+      // const updatedOrderFromServer: OrderItem = await response.json();
+      // setLocalOrders(prevOrders =>
+      console.log(`Successfully updated order ${orderId} to status ${newStatus}`);
+
+    } catch (updateError: any) {
+      console.error(`Failed to update order ${orderId} status:`, updateError);
+      // Revert optimistic update if not already done
+       setLocalOrders(prevOrders =>
+           prevOrders.map(order =>
+             order.id === orderId ? originalOrder : order
+           )
+        );
+      alert(`Error updating order status: ${updateError.message}`);
+    }
+  };
+
+  // --- NEW: Function to handle archiving an order ---
+  const handleArchiveOrder = async (orderId: string) => {
+    if (!user || user.role !== 'manager') {
+      alert('Permission denied.'); // Should not happen if button is hidden, but good practice
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to archive order ${orderId}? It will be hidden from this view.`)) {
+      return;
+    }
+
+    // Optimistic UI Update: Remove the order immediately
+    setLocalOrders(prevOrders => prevOrders.filter(order => order.id !== orderId));
+
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`http://localhost:3001/api/orders/${orderId}/archive`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        // No body needed for this simple archive action
+      });
+
+      if (!response.ok) {
+        // Revert optimistic update on failure
+        // Fetching orders again is simpler than trying to re-insert the removed one
+        fetchOrders(); // Refetch to get the original state back
+        const errorData = await response.json().catch(() => ({ message: 'Server error archiving order.'}));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      console.log(`Successfully archived order ${orderId}`);
+      // No need to refetch on success, optimistic update handles it.
+
+    } catch (archiveError: any) {
+      console.error(`Failed to archive order ${orderId}:`, archiveError);
+      // Ensure state is reverted if not already done
+      fetchOrders(); // Refetch to be sure
+      alert(`Error archiving order: ${archiveError.message}`);
+    }
+  };
+
+  // --- Render Logic ---
+  // console.log('[Order.tsx] Rendering with state:', { isLoading, error, localOrders }); // Removed log
+
+  // Handle loading state
+  if (isLoading) {
+    return <div className="p-6 text-center text-gray-500">Loading orders...</div>; 
+  }
+
+  // Handle error state
+  if (error) {
+    return <div className="p-6 text-center text-red-500">Error: {error}</div>;
+  }
+
+  // Main Render
   return (
     <div className="text-brown-800 p-6">
       <div className="flex justify-between items-center mb-8">
@@ -63,10 +210,17 @@ const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
               <div className="col-span-2">
                 {order.items.map((item, index) => (
                   <div key={index} className="text-sm">
-                    {item.quantity}x {item.name}
-                    <span className="text-gray-500 text-xs block">
-                      {item.customizations.join(' • ')}
-                    </span>
+                    <p className="font-medium">{item.quantity}x {item.name}</p>
+                    {/* Display grouped customizations */}
+                    {item.customizations && item.customizations.length > 0 && (
+                      <ul className="text-xs text-gray-600 pl-3 list-disc list-inside mt-1">
+                        {item.customizations.map((cust, custIndex) => (
+                          <li key={custIndex}>
+                             <span className="font-medium">{cust.group}:</span> {cust.option}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 ))}
               </div>
@@ -84,7 +238,7 @@ const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
               <div className="flex gap-2">
                 {order.status === 'pending' && (
                   <button
-                    onClick={() => updateOrderStatus(order.id, 'preparing')}
+                    onClick={() => handleUpdateStatus(order.id, 'preparing')}
                     className="px-3 py-1 text-white rounded-lg bg-green-500 hover:bg-green-600"
                     title="Accept Order"
                   >
@@ -93,7 +247,7 @@ const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
                 )}
                 {order.status === 'preparing' && (
                   <button
-                    onClick={() => updateOrderStatus(order.id, 'ready')}
+                    onClick={() => handleUpdateStatus(order.id, 'ready')}
                     className="px-3 py-1 bg-blue-500 text-white rounded-lg"
                   >
                     Mark Ready
@@ -101,15 +255,25 @@ const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
                 )}
                 {order.status === 'ready' && (
                   <button
-                    onClick={() => updateOrderStatus(order.id, 'completed')}
+                    onClick={() => handleUpdateStatus(order.id, 'completed')}
                     className="px-3 py-1 bg-green-500 text-white rounded-lg"
                   >
                     Complete
                   </button>
                 )}
+                {/* Show Archive button only for managers on completed orders */}
+                {user?.role === 'manager' && order.status === 'completed' && (
+                   <button
+                    onClick={() => handleArchiveOrder(order.id)}
+                    className="px-3 py-1 bg-gray-500 text-white rounded-lg text-xs hover:bg-gray-600"
+                    title="Archive Order"
+                  >
+                    Archive
+                  </button>
+                )}
                 {['pending', 'preparing'].includes(order.status) && (
                   <button
-                    onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                    onClick={() => handleUpdateStatus(order.id, 'cancelled')}
                     className="px-3 py-1 bg-red-500 text-white rounded-lg"
                   >
                     Cancel
@@ -118,10 +282,14 @@ const Order: React.FC<OrderPageProps> = ({ orders, updateOrderStatus }) => {
               </div>
             </div>
           ))}
-        </div>
-      </div>
-    </div>
-  );
+        </div> 
+      </div> 
+    </div> 
+  ); // End of main return
+
+  // This return null is now logically unnecessary if isLoading/error handle all other cases
+  // but doesn't hurt to leave it as a safety net if localOrders could be null/undefined somehow.
+  // return null; 
 };
 
 export default Order; 

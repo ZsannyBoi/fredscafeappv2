@@ -9,15 +9,10 @@ interface ProcessedRewardItem extends RawRewardItem {
     isVoucher?: boolean; // Flag to identify if this is from customerInfo.activeVouchers
 }
 
-// Props for the Rewards component
+// Updated Props for the Rewards component
 interface RewardsProps {
-    rewardsData: RawRewardItem[];
-    customerInfo: CustomerInfo;
-    user: User | null; // Current logged-in user
-    updateVoucherStatus: (voucherInstanceId: string, newStatus: 'claimed' | 'expired') => void; // Add this prop
-    deductPoints: (customerId: string, pointsToDeduct: number) => void; // Add deductPoints prop
-    claimedGeneralRewards: Set<string>; // Set of claimed general reward IDs for the current customer
-    markGeneralRewardAsClaimed: (customerId: string, rewardId: string) => void; // Function to mark a general reward as claimed
+    targetCustomerId: string; // ID of the customer whose rewards are being viewed
+    user: User | null;        // Current logged-in user (for role checks, etc.)
 }
 
 // --- Eligibility Check Helper Functions ---
@@ -262,194 +257,253 @@ const checkRewardEligibility = (
 
 
 const Rewards: React.FC<RewardsProps> = ({ 
-    rewardsData, 
-    customerInfo, 
-    user, 
-    updateVoucherStatus, 
-    deductPoints, 
-    claimedGeneralRewards, // New prop
-    markGeneralRewardAsClaimed // New prop
+    targetCustomerId, // Use targetCustomerId from props
+    user 
 }) => {
-    // const [claimedVoucherInstanceIds, setClaimedVoucherInstanceIds] = useState(new Set<string>()); // No longer needed here for general claims
+    // --- State for fetched data ---
+    const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
+    const [rewardsData, setRewardsData] = useState<RawRewardItem[]>([]);
+    // Removed claimedGeneralRewards - this info needs to come from API
+    const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [error, setError] = useState<string | null>(null);
+
+    // --- Local UI State ---
     const [processedRewards, setProcessedRewards] = useState<ProcessedRewardItem[]>([]);
     const [selectedReward, setSelectedReward] = useState<ProcessedRewardItem | null>(null);
     const [rewardSearchTerm, setRewardSearchTerm] = useState('');
+    const [isClaiming, setIsClaiming] = useState<string | null>(null); // Track claiming process (rewardId or instanceId)
+    const [claimedStatusOverrides, setClaimedStatusOverrides] = useState<Record<string, boolean>>({}); // Track claimed status locally after successful API call
 
+    // --- Data Fetching Effect ---
     useEffect(() => {
+        const fetchData = async () => {
+            if (!targetCustomerId) {
+                setError("No customer ID provided.");
+                setIsLoading(false);
+                return;
+            }
+            setIsLoading(true);
+            setError(null);
+            setCustomerInfo(null); // Reset while fetching
+            setRewardsData([]);
+            setClaimedStatusOverrides({}); // Reset overrides
+
+            try {
+                const token = localStorage.getItem('authToken');
+                const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+
+                // Fetch Customer Info (includes active vouchers)
+                const customerInfoResponse = await fetch(`http://localhost:3001/api/customers/${targetCustomerId}/info`, { headers });
+                if (!customerInfoResponse.ok) throw new Error(`Failed to fetch customer info: ${customerInfoResponse.statusText}`);
+                const customerData: CustomerInfo = await customerInfoResponse.json();
+                setCustomerInfo(customerData);
+
+                // Fetch Reward Definitions
+                const rewardsResponse = await fetch('http://localhost:3001/api/rewards/definitions', { headers });
+                if (!rewardsResponse.ok) throw new Error(`Failed to fetch reward definitions: ${rewardsResponse.statusText}`);
+                const rewardDefs: RawRewardItem[] = await rewardsResponse.json();
+                // TODO: Process rewardDefs if criteria is JSON string
+                setRewardsData(rewardDefs);
+
+                // TODO: Fetch claimed general rewards for this customer if needed separately 
+                // OR adjust backend /info endpoint to include this.
+                // For now, eligibility check won't know about previously claimed general rewards.
+                // Let's assume for now `POST /api/rewards/claim` handles the duplicate check.
+
+            } catch (fetchError: any) {
+                console.error("Error fetching rewards page data:", fetchError);
+                setError(fetchError.message || "Failed to load rewards data.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        fetchData();
+    }, [targetCustomerId]); // Re-fetch when targetCustomerId changes
+
+    // --- Process Rewards Effect (Runs when fetched data changes) ---
+    useEffect(() => {
+        if (!customerInfo || rewardsData.length === 0) {
+            setProcessedRewards([]); // Clear if no data
+            return;
+        }
+
+        // This processing logic now uses fetched `rewardsData` and `customerInfo`
         const allDisplayableRewards: ProcessedRewardItem[] = [];
 
         // 1. Process active vouchers from customerInfo
-        if (customerInfo.activeVouchers) {
-            customerInfo.activeVouchers.forEach(voucher => {
-                const underlyingReward = rewardsData.find(r => r.id === voucher.rewardId);
-                if (underlyingReward) {
-                    const eligibility = checkRewardEligibility(underlyingReward, customerInfo, customerInfo.activeVouchers || [], claimedGeneralRewards, true, voucher);
-                    const processedVoucher: ProcessedRewardItem = {
-                        // Properties from RawRewardItem (underlyingReward)
-                        id: underlyingReward.id,
-                        name: voucher.name, // Override with voucher's name
-                        description: voucher.description || underlyingReward.description, // Override with voucher's description if available
-                        image: underlyingReward.image,
-                        type: underlyingReward.type,
-                        criteria: underlyingReward.criteria,
-                        pointsCost: underlyingReward.pointsCost,
-                        freeMenuItemIds: underlyingReward.freeMenuItemIds,
-                        discountPercentage: underlyingReward.discountPercentage,
-                        discountFixedAmount: underlyingReward.discountFixedAmount,
-                        earningHint: underlyingReward.earningHint,
-                        // Properties specific to ProcessedRewardItem or overridden
-                        instanceId: voucher.instanceId,
-                        isVoucher: true,
-                        currentStatus: eligibility.currentStatus, // Explicitly from checkRewardEligibility
-                        progressMessage: eligibility.progressMessage, // Explicitly from checkRewardEligibility
-                    };
-                    allDisplayableRewards.push(processedVoucher);
-                }
-            });
-        }
+        (customerInfo.activeVouchers || []).forEach(voucher => {
+            const underlyingReward = rewardsData.find(r => r.id === voucher.rewardId);
+            if (underlyingReward) {
+                 // Pass empty Set for claimedGeneralRewards for now
+                const eligibility = checkRewardEligibility(underlyingReward, customerInfo, customerInfo.activeVouchers || [], new Set<string>(), true, voucher);
+                // Check override status
+                const isClaimedOverride = claimedStatusOverrides[voucher.instanceId];
+                const finalStatus = isClaimedOverride ? 'Claimed' : eligibility.currentStatus;
+                const finalMessage = isClaimedOverride ? 'Voucher claimed successfully.' : eligibility.progressMessage;
 
-        // 2. Process general rewardsData, avoiding duplicates if already shown as an active voucher
-        rewardsData.forEach(reward => {
-            if (!allDisplayableRewards.some(pr => pr.id === reward.id && pr.isVoucher)) {
-                const eligibility = checkRewardEligibility(reward, customerInfo, customerInfo.activeVouchers || [], claimedGeneralRewards);
-                const processedGeneralReward: ProcessedRewardItem = {
-                    // Properties from RawRewardItem (reward)
-                    id: reward.id,
-                    name: reward.name,
-                    description: reward.description,
-                    image: reward.image,
-                    type: reward.type,
-                    criteria: reward.criteria,
-                    pointsCost: reward.pointsCost,
-                    freeMenuItemIds: reward.freeMenuItemIds,
-                    discountPercentage: reward.discountPercentage,
-                    discountFixedAmount: reward.discountFixedAmount,
-                    earningHint: reward.earningHint,
-                    // Properties specific to ProcessedRewardItem or overridden
-                    isVoucher: false,
-                    currentStatus: eligibility.currentStatus, // Explicitly from checkRewardEligibility
-                    progressMessage: eligibility.progressMessage, // Explicitly from checkRewardEligibility
-                    // instanceId will be undefined here, which is fine for ProcessedRewardItem
-                };
-                allDisplayableRewards.push(processedGeneralReward);
+                allDisplayableRewards.push({
+                    ...underlyingReward, // Spread definition first
+                    name: voucher.name,
+                    description: voucher.description || underlyingReward.description,
+                    instanceId: voucher.instanceId,
+                    isVoucher: true,
+                    currentStatus: finalStatus,
+                    progressMessage: finalMessage,
+                });
             }
         });
-        
-        // Deduplication logic (ensure it preserves ProcessedRewardItem type)
+
+        // 2. Process general rewardsData
+        rewardsData.forEach(reward => {
+            if (!allDisplayableRewards.some(pr => pr.id === reward.id && pr.isVoucher)) {
+                // Pass empty Set for claimedGeneralRewards for now
+                const eligibility = checkRewardEligibility(reward, customerInfo, customerInfo.activeVouchers || [], new Set<string>());
+                // Check override status (using reward.id for general)
+                const isClaimedOverride = claimedStatusOverrides[reward.id];
+                const finalStatus = isClaimedOverride ? 'Claimed' : eligibility.currentStatus;
+                const finalMessage = isClaimedOverride ? 'Reward claimed successfully.' : eligibility.progressMessage;
+
+                allDisplayableRewards.push({
+                    ...reward,
+                    isVoucher: false,
+                    currentStatus: finalStatus,
+                    progressMessage: finalMessage,
+                });
+            }
+        });
+
+        // Deduplication (same logic as before)
         const uniqueRewards = allDisplayableRewards.reduce((acc, current) => {
-            const existingIndex = acc.findIndex(item => item.id === current.id);
+           const existingIndex = acc.findIndex(item => item.id === current.id);
             if (existingIndex !== -1) {
-                // If current is a voucher and existing is not, replace existing with current.
                 if (current.isVoucher && !acc[existingIndex].isVoucher) {
                     acc[existingIndex] = current;
                 }
-                // If both are vouchers, you might have more complex logic, but for now, first one wins or current replaces if preferred.
-                // For simplicity, if IDs match and one is a voucher, we prioritize the voucher version if `current` is it.
-                // Or, if types are same, current can overwrite (or not, depending on desired behavior)
             } else {
                 acc.push(current);
             }
             return acc;
         }, [] as ProcessedRewardItem[]);
 
-        // Re-check claimed status for general rewards based on the new prop, after merging vouchers
-        const finalProcessedRewards = uniqueRewards.map((rewardItem): ProcessedRewardItem => { // Explicitly type rewardItem and return type
-            if (!rewardItem.isVoucher && claimedGeneralRewards.has(rewardItem.id)) {
-                return {
-                    ...rewardItem,
-                    currentStatus: 'Claimed', // This is a valid literal type
-                    progressMessage: 'You have already claimed this reward.'
-                };
-            }
-            return rewardItem; // rewardItem here is already ProcessedRewardItem
-        });
+        setProcessedRewards(uniqueRewards);
 
-        setProcessedRewards(finalProcessedRewards);
-    }, [rewardsData, customerInfo, claimedGeneralRewards, user]);
+    // Update when fetched data or local overrides change
+    }, [rewardsData, customerInfo, claimedStatusOverrides]);
 
+    // --- Filtering (remains the same) ---
     const filteredRewards = processedRewards.filter(reward => 
         reward.name.toLowerCase().includes(rewardSearchTerm.toLowerCase()) ||
         (reward.description && reward.description.toLowerCase().includes(rewardSearchTerm.toLowerCase()))
     );
 
+     // --- Selection (remains the same) ---
      const handleSelectReward = (reward: ProcessedRewardItem) => {
         setSelectedReward(reward);
      };
 
-     const handleClaimReward = (rewardId: string, instanceId?: string) => {
-        // SECURITY NOTE: This function initiates a claim process that is currently client-side.
-        // All actions (point deduction, marking as claimed, updating voucher status) MUST be 
-        // securely processed and validated by the backend via API calls triggered by 
-        // updateVoucherStatus, deductPoints, or markGeneralRewardAsClaimed props.
+     // --- Updated Claim Handler ---
+     const handleClaimReward = async (rewardId: string, instanceId?: string) => {
+        const claimIdentifier = instanceId || rewardId;
+        setIsClaiming(claimIdentifier); // Show loading state on button
 
-        const rewardToClaim = processedRewards.find(r => r.isVoucher ? r.instanceId === instanceId : r.id === rewardId);
+        try {
+            const token = localStorage.getItem('authToken');
+            const headers = { 
+                'Content-Type': 'application/json', 
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}) 
+            };
+            
+            const body = JSON.stringify({ 
+                rewardId: instanceId ? undefined : rewardId, // Send rewardId only if not a voucher claim
+                voucherInstanceId: instanceId
+            });
 
-        if (rewardToClaim && rewardToClaim.currentStatus === 'Claim') {
-            const targetCustomerId = customerInfo.id; // Get customer ID from props
+            const response = await fetch('http://localhost:3001/api/rewards/claim', {
+                method: 'POST',
+                headers: headers,
+                body: body,
+            });
 
-            if (rewardToClaim.isVoucher && instanceId) {
-                // Claiming a specific voucher instance
-                updateVoucherStatus(instanceId, 'claimed');
-                alert(`Voucher "${rewardToClaim.name}" used!`);
-                // Optional: Update local claimed state if needed for immediate UI feedback before re-render
-                // setClaimedVoucherInstanceIds(prevIds => new Set(prevIds).add(instanceId)); // This was for voucher instances, parent now manages claimed status of vouchers via updateVoucherStatus
+            const result = await response.json();
 
-            } else if (!rewardToClaim.isVoucher) {
-                // Claiming a general reward (not a pre-existing voucher)
-                const commonClaimAction = () => {
-                    markGeneralRewardAsClaimed(targetCustomerId, rewardToClaim.id);
-                    alert(`Redeemed "${rewardToClaim.name}"! Details: ${rewardToClaim.pointsCost ? rewardToClaim.pointsCost + ' points deducted.' : 'No points cost.'}`);
-                };
-
-                if (rewardToClaim.pointsCost) {
-                    // Reward costs points
-                    if (customerInfo.loyaltyPoints >= rewardToClaim.pointsCost) {
-                        deductPoints(targetCustomerId, rewardToClaim.pointsCost);
-                        commonClaimAction();
-                    } else {
-                        alert('Not enough points to redeem.');
-                        return; // Stop claim process
-                    }
-                } else {
-                    // Claiming a general reward that doesn't cost points (e.g., birthday reward)
-                    commonClaimAction();
-                }
-                // Removed: setClaimedVoucherInstanceIds(prevIds => new Set(prevIds).add(rewardId + '_generalclaim_'));
+            if (!response.ok) {
+                throw new Error(result.message || `Claim failed: ${response.statusText}`);
             }
-            // Deselect reward after successful claim attempt
+
+            alert(result.message || 'Reward claimed successfully!');
+            
+            // Optimistic Update: Mark as claimed locally immediately
+            setClaimedStatusOverrides(prev => ({...prev, [claimIdentifier]: true}));
+
+            // Option 1: Re-fetch customer data to get updated points/voucher status
+            // fetchData(); // You might need to extract fetchData to be callable here
+            
+            // Option 2: Update local customerInfo state based on response (if backend provides it)
+            // if (result.updatedPoints !== undefined && customerInfo) {
+            //    setCustomerInfo(prev => prev ? {...prev, loyaltyPoints: result.updatedPoints} : null);
+            // }
+            // If a voucher was claimed, manually update its status in customerInfo?
+            // This gets complex, re-fetching might be safer.
+            
+            // Deselect reward from sidebar
             setSelectedReward(null);
-        } else {
-            alert("Cannot claim this reward at this time.");
+
+        } catch (claimError: any) {
+            console.error("Claim Error:", claimError);
+            alert(`Error claiming reward: ${claimError.message}`);
+            // Optionally reset claimed override on failure?
+            // setClaimedStatusOverrides(prev => ({...prev, [claimIdentifier]: false}));
+        } finally {
+            setIsClaiming(null); // Hide loading state on button
         }
      };
 
+    // --- getButtonProps (Updated to use isClaiming state) ---
     const getButtonProps = (reward: ProcessedRewardItem) => {
+        const identifier = reward.isVoucher ? reward.instanceId : reward.id;
+        if (isClaiming === identifier) {
+             return { text: 'Claiming...', className: 'bg-gray-400 animate-pulse', disabled: true };
+        }
+        // Existing logic based on reward.currentStatus
         switch (reward.currentStatus) {
             case 'Claim':
-                // Add check for pointsCost if applicable
-                if (reward.pointsCost && customerInfo.loyaltyPoints < reward.pointsCost && !reward.isVoucher) {
+            case 'ActiveVoucher': // Treat ActiveVoucher as Claimable
+                 // Check points cost only for non-vouchers
+                if (reward.pointsCost && !reward.isVoucher && customerInfo && customerInfo.loyaltyPoints < reward.pointsCost) {
                     return { text: `Need ${reward.pointsCost} Pts`, className: 'bg-yellow-500', disabled: true };
                 }
-                return { text: 'Claim', className: 'bg-green-600 hover:bg-green-700', disabled: false };
+                const text = reward.currentStatus === 'ActiveVoucher' ? 'Use Voucher' : 'Claim';
+                const baseColor = reward.currentStatus === 'ActiveVoucher' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-green-600 hover:bg-green-700';
+                return { text, className: baseColor, disabled: false };
             case 'Claimed':
                  return { text: 'Claimed', className: 'bg-blue-600', disabled: true };
             case 'Ineligible':
-            case 'ActiveVoucher': // ActiveVoucher implies it's claimable if all other conditions met
-                if(reward.currentStatus === 'ActiveVoucher') return { text: 'Use Voucher', className: 'bg-emerald-600 hover:bg-emerald-700', disabled: false };
                 return { text: 'Ineligible', className: 'bg-gray-400 cursor-not-allowed', disabled: true };
             default:
                 return { text: 'Status Unknown', className: 'bg-gray-300', disabled: true };
         }
     };
 
+  // --- Render Logic (Check for loading/error states first) ---
+  if (isLoading) {
+    return <div className="p-6">Loading rewards data...</div>;
+  }
+  if (error) {
+    return <div className="p-6 text-red-500">Error: {error}</div>;
+  }
+  if (!customerInfo) { // Check if customerInfo failed to load
+      return <div className="p-6 text-gray-500">Could not load customer information.</div>;
+  }
+
+  // Main Render (uses fetched customerInfo and processedRewards)
   return (
     <div className="flex gap-6 h-[calc(100vh-theme(space.24))]">
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col">
              <h1 className="text-3xl font-semibold text-brown-900 mb-6">Rewards</h1>
 
-            {/* Top Customer Info Banner - Changed background, aligned content left */}
-            {user && (
+            {/* Top Customer Info Banner - Uses fetched customerInfo */}
             <div className="bg-emerald-200 p-6 rounded-t-2xl flex items-center space-x-4 mb-6 shadow-sm border-b border-emerald-300">
                     <img src={customerInfo.avatar || '/src/assets/person.svg'} alt="Customer Avatar" className="w-12 h-12 object-contain bg-white rounded-full p-1" />
                  <div>
@@ -458,7 +512,6 @@ const Rewards: React.FC<RewardsProps> = ({
                         <p className="text-emerald-700 text-sm">Points: {customerInfo.loyaltyPoints}</p>
                  </div>
             </div>
-            )}
             
              {/* All Rewards Section */}
              <div className="flex justify-between items-center mb-4">
@@ -475,24 +528,27 @@ const Rewards: React.FC<RewardsProps> = ({
                  </div>
              </div>
 
-             {/* Rewards Grid */}
+             {/* Rewards Grid - Uses processedRewards, getButtonProps, handleClaimReward */} 
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-5 overflow-y-auto pr-2 flex-1">
                 {filteredRewards.map(reward => {
                     const buttonProps = getButtonProps(reward);
+                    const identifier = reward.isVoucher ? reward.instanceId : reward.id;
                     return (
                          <div 
-                            key={reward.isVoucher ? reward.instanceId : reward.id} 
+                            key={identifier} 
                             onClick={() => handleSelectReward(reward)}
                             className={`bg-white rounded-2xl p-4 shadow border hover:shadow-md transition-shadow cursor-pointer flex flex-col ${selectedReward?.id === reward.id && selectedReward?.instanceId === reward.instanceId ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'}`}>
-                             <img src={reward.image} alt={reward.name} className="w-24 h-24 object-contain mx-auto mb-3" />
+                             <img src={reward.image || '/src/assets/rewards.png'} alt={reward.name} className="w-24 h-24 object-contain mx-auto mb-3" />
                              <h4 className="text-md font-semibold text-brown-900 mb-2 text-center flex-1">{reward.name} {reward.isVoucher && <span className="text-xs text-emerald-600 block">(Voucher)</span>}</h4>
                              <button 
                                 onClick={(e) => {
-                                     e.stopPropagation(); // Prevent card selection when clicking button
-                                     if (reward.currentStatus === 'Claim' || reward.currentStatus === 'ActiveVoucher') handleClaimReward(reward.id, reward.instanceId);
+                                     e.stopPropagation(); 
+                                     if (reward.currentStatus === 'Claim' || reward.currentStatus === 'ActiveVoucher') {
+                                         handleClaimReward(reward.id, reward.instanceId);
+                                     }
                                 }}
                                 className={`w-full py-2 rounded-lg text-white text-sm font-medium transition-colors ${buttonProps.className}`}
-                                disabled={buttonProps.disabled}
+                                disabled={buttonProps.disabled || isClaiming === identifier} // Disable if claiming this specific one
                              >
                                 {buttonProps.text}
                             </button>
@@ -505,7 +561,7 @@ const Rewards: React.FC<RewardsProps> = ({
             </div>
         </div>
 
-        {/* Right Sidebar - Reward Details */}
+        {/* Right Sidebar - Uses selectedReward and customerInfo */} 
         <div className="w-80 bg-white rounded-2xl p-5 shadow flex flex-col border border-gray-100">
             <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold text-brown-800">Reward details</h2>
@@ -517,7 +573,7 @@ const Rewards: React.FC<RewardsProps> = ({
                 </button>
             </div>
 
-            {selectedReward ? (
+            {selectedReward && customerInfo ? (
                 <>
                     <div className="mb-4 border-b border-gray-100 pb-4">
                         <p className="text-xs text-gray-500 mb-1">Customer</p>
@@ -526,7 +582,7 @@ const Rewards: React.FC<RewardsProps> = ({
 
                      <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-4 text-sm">
                         <div className="flex items-start gap-3 mb-3">
-                             <img src={selectedReward.image} alt={selectedReward.name} className="w-12 h-12 object-contain bg-gray-50 rounded-md p-1 border"/>
+                             <img src={selectedReward.image || '/src/assets/rewards.png'} alt={selectedReward.name} className="w-12 h-12 object-contain bg-gray-50 rounded-md p-1 border"/>
                              <div className="flex-1">
                                  <p className="text-md font-medium text-gray-800">{selectedReward.name}</p>
                                  <p className={`text-sm font-medium ${selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher' ? 'text-green-600' : selectedReward.currentStatus === 'Claimed' ? 'text-blue-600' : 'text-gray-500'}`}>
@@ -556,18 +612,21 @@ const Rewards: React.FC<RewardsProps> = ({
                          </div>
                      </div>
 
-                     {/* Action Button */}
+                     {/* Action Button - Updated onClick */}
                       {(() => {
                            const buttonProps = getButtonProps(selectedReward);
+                           const identifier = selectedReward.isVoucher ? selectedReward.instanceId : selectedReward.id;
                            return (
                                 <button 
                                     onClick={() => {
-                                         if (selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher') handleClaimReward(selectedReward.id, selectedReward.instanceId);
+                                         if (selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher') {
+                                            handleClaimReward(selectedReward.id, selectedReward.instanceId);
+                                         }
                                     }}
                                     className={`w-full py-3 rounded-xl text-white font-semibold text-md transition-colors ${buttonProps.className}`}
-                                    disabled={buttonProps.disabled}
+                                    disabled={buttonProps.disabled || isClaiming === identifier}
                                 >
-                                    {selectedReward.currentStatus === 'Claim' ? 'Redeem Reward' : selectedReward.currentStatus === 'ActiveVoucher' ? 'Use Voucher' : buttonProps.text}
+                                    {isClaiming === identifier ? 'Processing...' : (selectedReward.currentStatus === 'Claim' ? 'Redeem Reward' : selectedReward.currentStatus === 'ActiveVoucher' ? 'Use Voucher' : buttonProps.text)}
                                 </button>
                            );
                       })()}

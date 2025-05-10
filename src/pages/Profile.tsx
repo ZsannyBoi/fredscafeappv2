@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types'; // Import User type
 
 // Updated ProfileInfo to better match User type and what we can edit
 interface EditableProfileInfo {
     name: string;
     email: string; // Assuming email is user.id and might not be directly editable here
-    avatar: string;
+    avatar: string; // This will hold the URL (existing or blob preview)
+    avatarFile?: File | null; // To hold the new file if one is selected
     phone?: string;
     address: string;
 }
@@ -17,25 +18,64 @@ interface ProfilePageProps {
 const Profile: React.FC<ProfilePageProps> = ({ user }) => {
   const initialProfileState: EditableProfileInfo = {
     name: user?.name || "User Name",
-    email: user?.id || "user@example.com", // user.id is the email
-    avatar: user?.role === 'manager' ? "/src/assets/manager-avatar.jpg" : "/src/assets/person.svg",
+    email: user?.id || "user@example.com",
+    avatar: user?.avatar || "/src/assets/avatar.png", // Updated fallback
+    avatarFile: null,
     phone: "", // Placeholder, not in User type
     address: "", // Placeholder, not in User type
   };
 
   const [editFormData, setEditFormData] = useState<EditableProfileInfo>(initialProfileState);
   const [isEditing, setIsEditing] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Effect to reset form data if the user prop changes (e.g., on logout/login)
   useEffect(() => {
     setEditFormData({
       name: user?.name || "User Name",
       email: user?.id || "user@example.com",
-      avatar: user?.role === 'manager' ? "/src/assets/manager-avatar.jpg" : "/src/assets/person.svg",
+      avatar: user?.avatar || "/src/assets/avatar.png", // Updated fallback
+      avatarFile: null,
       phone: "", // Reset placeholder
       address: "", // Reset placeholder
     });
   }, [user]);
+
+  // Clean up avatar blob URL if it exists in editFormData
+  useEffect(() => {
+    return () => {
+      if (editFormData.avatar && editFormData.avatar.startsWith('blob:')) {
+        URL.revokeObjectURL(editFormData.avatar);
+      }
+    };
+  }, [editFormData.avatar]);
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      // Revoke previous blob URL if one exists from a previous selection in this session
+      if (editFormData.avatar && editFormData.avatar.startsWith('blob:')) {
+        URL.revokeObjectURL(editFormData.avatar);
+      }
+      const tempImageUrl = URL.createObjectURL(file);
+      setEditFormData(prev => ({
+        ...prev,
+        avatar: tempImageUrl,
+        avatarFile: file,
+      }));
+    } else {
+        // If no file is selected (e.g., user cancels file dialog), 
+        // optionally revert to original avatar or do nothing.
+        // For now, we'll just clear any selected file.
+        setEditFormData(prev => ({
+            ...prev,
+            avatarFile: null,
+            // Potentially revert avatar to user.avatar if a blob was previously shown
+            // avatar: user?.avatar || (user?.role === 'manager' ? "/src/assets/manager-avatar.jpg" : "/src/assets/person.svg"),
+        }));
+    }
+    e.target.value = ''; // Reset file input to allow re-selection of the same file
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       const { name, value } = e.target;
@@ -54,7 +94,8 @@ const Profile: React.FC<ProfilePageProps> = ({ user }) => {
       setEditFormData({
         name: user?.name || "User Name",
         email: user?.id || "user@example.com",
-        avatar: user?.role === 'manager' ? "/src/assets/manager-avatar.jpg" : "/src/assets/person.svg", // Or a more complex avatar logic
+        avatar: user?.avatar || "/src/assets/avatar.png", // Updated fallback
+        avatarFile: null, // Clear any selected file
         phone: "", // Reset placeholder
         address: "", // Reset placeholder
       });
@@ -64,10 +105,14 @@ const Profile: React.FC<ProfilePageProps> = ({ user }) => {
       e.preventDefault();
       console.log("Saving profile data:", editFormData);
       // TODO: Implement API call to save data (name, phone, address, avatar) to backend.
-      // For demo, we could update App.tsx's user state if it held more than id/role/name.
-      // Since User in App.tsx is simple, we just log. User's actual name in App.tsx won't change from this save.
-      alert("Profile changes saved (simulated). To see name changes reflected globally, update App.tsx state management.");
+      // If editFormData.avatarFile exists, it needs to be uploaded.
+      // The server would then return a new URL for editFormData.avatar to be updated with.
+      alert("Profile changes saved (simulated). Check console for data including new avatar file/URL.");
       setIsEditing(false);
+      // After successful save, avatarFile should be cleared
+      // setEditFormData(prev => ({ ...prev, avatarFile: null })); 
+      // And editFormData.avatar should reflect the new persistent URL from the server, not the blob.
+      // For demo, if we had a global user update fn: updateUser({ ...user, name: editFormData.name, avatar: editFormData.avatar (if new)})
   };
   
   // Helper to get a display-friendly role name
@@ -82,14 +127,23 @@ const Profile: React.FC<ProfilePageProps> = ({ user }) => {
 
   return (
     <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
+       <HiddenAvatarInput ref={avatarInputRef} onChange={handleAvatarChange} />
        <div className="bg-emerald-200 p-6 flex items-center space-x-6 relative">
             <div className="relative w-24 h-24">
                 <img 
-                    src={isEditing ? editFormData.avatar : (user.role === 'manager' ? "/src/assets/manager-avatar.jpg" : "/src/assets/person.svg")}
+                    src={editFormData.avatar} // Always show avatar from editFormData for consistency in edit mode
                     alt="Profile" 
                     className="w-full h-full rounded-full object-cover border-4 border-white shadow-md"
                 />
-                {/* Avatar editing UI (simplified) */}
+                {isEditing && (
+                    <button 
+                        type="button"
+                        onClick={() => avatarInputRef.current?.click()}
+                        className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 text-white rounded-full text-xs hover:bg-opacity-50 transition-opacity"
+                    >
+                        Edit Image
+                    </button>
+                )}
             </div>
             <div>
                 <h2 className="text-2xl font-semibold text-white">{isEditing ? editFormData.name : user.name}</h2>
@@ -181,6 +235,11 @@ const Profile: React.FC<ProfilePageProps> = ({ user }) => {
     </div>
   );
 };
+
+// Hidden File Input for Avatar
+const HiddenAvatarInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>((props, ref) => (
+    <input type="file" accept="image/*" ref={ref} className="hidden" {...props} />
+));
 
 const FormGroup: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({ label, children, className }) => (
     <div className={className}>

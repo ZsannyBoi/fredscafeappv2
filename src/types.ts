@@ -1,8 +1,9 @@
 export interface User {
-  id: string;
+  id: string; // Email
   name: string;
   role: 'manager' | 'employee' | 'cashier' | 'cook' | 'customer';
   referralCode?: string; // Added for referral system
+  avatar?: string; // Added for user avatar
 }
 
 // Interface for time-based reward availability
@@ -101,7 +102,7 @@ export interface OrderItem {
   items: {
     name: string;
     quantity: number;
-    customizations: string[];
+    customizations: { group: string; option: string }[];
   }[];
   total: number;
   status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
@@ -110,15 +111,15 @@ export interface OrderItem {
 }
 
 export interface PlacedOrderItemDetail {
-  name: string;
+  productId: string;
+  name: string; // Keep name for potential backend cross-check or logging
   quantity: number;
-  customizations: string[];
+  selectedOptionIds: Record<string, string | string[]>; // e.g., { '1': '3', '4': ['11', '12'] } (groupId: optionId | optionIds)
 }
 
 export interface NewOrderData {
   customerName: string;
   items: PlacedOrderItemDetail[];
-  totalAmount: number;
 }
 
 // --- Application Settings Type ---
@@ -146,7 +147,9 @@ export interface ProductOption {
 export interface OptionCategory {
     id: string; // Unique ID for the category (e.g., "size", "milk", or uuid)
     name: string; // Display name (e.g., "Size", "Milk Type")
+    image?: string; // Optional image for the category
     selectionType: 'radio' | 'checkbox'; // How options are selected
+    is_required: boolean; // Added is_required
     options: ProductOption[];
 }
 
@@ -162,6 +165,15 @@ export interface Product {
   tags?: string[]; 
 }
 
+// Type for OptionGroup as fetched from/sent to backend
+export interface BackendOptionGroup {
+  option_group_id: number;
+  name: string;
+  selection_type: 'radio' | 'checkbox';
+  is_required: boolean; // Added is_required
+  // created_at and updated_at are also present but usually not directly managed by frontend forms
+}
+
 // --- Employee Management Types ---
 export interface EmployeeData {
   id: string; // Internal unique ID for React keys, etc.
@@ -170,9 +182,18 @@ export interface EmployeeData {
   // Consider using a more specific UserRoleType if these roles align with User.role
   // Or keep as a separate set of job positions if distinct.
   position: 'Manager' | 'Barista' | 'Cashier' | 'Cook' | 'Shift Lead' | 'Other'; 
-  status: 'Active' | 'Inactive' | 'On Leave';
+  status: 'Active' | 'Inactive';
   email?: string;
   phone?: string;
   hireDate?: string; // ISO Date string (e.g., "YYYY-MM-DD")
   // Add other relevant details like emergencyContact, payRate, etc. if needed for the system.
+}
+
+export interface EmployeeFormDetails {
+  employeeId: string;
+  position: EmployeeData['position']; // Use the position type from EmployeeData
+  phone?: string;
+  status: EmployeeData['status']; // Use the status type from EmployeeData
+  hireDate?: string;
+  role?: User['role']; // Added for managing user's system role
 } 
