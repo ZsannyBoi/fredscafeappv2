@@ -74,22 +74,13 @@ espressolane/
 ├── public/               # Static assets
 ├── src/
 │   ├── assets/           # Images, fonts, etc.
-│   ├── components/       # Shared React components
-│   ├── contexts/         # React context providers (e.g., AuthContext)
-│   ├── hooks/            # Custom React hooks
-│   ├── lib/              # Utility functions, API helpers
 │   ├── pages/            # Page-level components (routed)
-│   ├── services/         # API service functions (old, consider consolidating into lib/api)
-│   ├── styles/           # Global styles, Tailwind base
-│   ├── types/            # TypeScript type definitions
+│   ├── types.ts           # TypeScript type definitions
 │   ├── App.tsx           # Main application component with routing
 │   ├── main.tsx          # Entry point of the React application
 │   └── vite-env.d.ts     # Vite environment types
 ├── server/
-│   ├── config/           # Database configuration
-│   ├── middleware/       # Express middleware (auth, error handling)
-│   ├── models/           # Database interaction logic (data access layer)
-│   ├── routes/           # API route definitions
+│   ├── db.js             # Database connection setup (MySQL)
 │   └── server.js         # Express server setup and entry point
 ├── .env.example          # Environment variable template for server
 ├── .eslintrc.cjs         # ESLint configuration
