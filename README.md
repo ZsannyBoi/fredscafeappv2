@@ -1,200 +1,269 @@
-# EspressoLane POS & Management System
+# EspressoLane - Coffee Shop Management System
 
-This is a comprehensive web application designed for EspressoLane, a modern coffee shop. It aims to streamline operations, manage sales, employees, inventory, and customer rewards.
+EspressoLane is a comprehensive coffee shop management system built with React, TypeScript, and Node.js. It provides a complete solution for managing coffee shop operations, including order management, employee management, customer loyalty, and menu management.
 
-## Key Features
+## Table of Contents
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [API Documentation](#api-documentation)
+- [User Roles](#user-roles)
+- [Features in Detail](#features-in-detail)
+- [Development](#development)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+- [License](#license)
 
-### Core Functionality
-*   **User Authentication:** Secure login and logout for different user roles.
-*   **Role-Based Access Control:** Differentiated access and features for Managers, Employees (Barista, Cashier, Cook, Shift Lead), and Customers.
+## Features
 
-### Pages & Modules
-*   **Home/Dashboard:** Overview page (details to be defined).
-*   **Menu Page:**
-    *   View products and categories.
-    *   Customize menu items with available options.
-    *   Add items to an order.
-*   **Order Management:**
-    *   View current and past orders.
-    *   Update order status (e.g., "Pending", "Preparing", "Ready", "Completed", "Cancelled").
-*   **Employee Management:**
-    *   View a list of all employees with their details.
-    *   Search for specific employees.
-    *   **Add New Employees:** A modal-based flow to select an existing user and assign employee-specific details (Employee ID, Position, Phone, Hire Date, Status, System Role).
-    *   **Edit Existing Employees:** Modify employee details.
-    *   Delete employee records (reverts user role to 'Customer').
-*   **Rewards Program:**
-    *   Customers can view their accumulated points and available rewards.
-*   **User Profile:** View and manage user-specific information.
-*   **Settings Page:**
-    *   **General:** General account settings.
-    *   **Display:** Customize application appearance (e.g., theme, profile banner).
-    *   **Privacy and Security:** Change account password and manage security preferences.
-*   **Manager-Specific Modules:**
-    *   **Edit Menu:**
-        *   Manage Products (add, edit, delete, assign to categories, manage option groups).
-        *   Manage Categories (add, edit, delete).
-        *   Manage Option Groups and Options (add, edit, delete).
-    *   **Edit Rewards:** Define and manage reward tiers and point requirements.
+### Core Features
+- **Order Management**
+  - Real-time order tracking
+  - Order status updates
+  - Order history and analytics
+  - Custom order options and modifiers
 
-### Backend & API
-*   **RESTful API:** Backend services built with Node.js and Express.js.
-*   **Database:** MySQL database for persistent storage.
-*   **Input Validation:** Server-side validation for incoming data.
-*   **Authorization:** Protecting API endpoints based on user roles.
-*   **CRUD Operations:** Endpoints for managing:
-    *   Users (Authentication)
-    *   Employees
-    *   Products, Categories, Option Groups, Options
-    *   Orders and Order Items
-    *   Rewards Definitions
-    *   Customer Rewards
+- **Menu Management**
+  - Dynamic menu creation and editing
+  - Product categories and options
+  - Price management
+  - Availability control
+
+- **Employee Management**
+  - Role-based access control
+  - Employee scheduling
+  - Performance tracking
+  - Employee profiles
+
+- **Customer Loyalty System**
+  - Points-based rewards
+  - Voucher management
+  - Tier-based benefits
+  - Referral system
+
+- **User Management**
+  - Multi-role support
+  - Profile management
+  - Authentication and authorization
+  - Password reset functionality
+
+### Additional Features
+- Real-time notifications
+- Image upload and management
+- Responsive design
+- Dark/Light theme support
+- Customizable settings
 
 ## Tech Stack
 
-*   **Frontend:**
-    *   React (v18+)
-    *   TypeScript
-    *   Vite (Build tool and development server)
-    *   React Router DOM (v6+ for navigation)
-    *   Tailwind CSS (for styling and UI components)
-*   **Backend:**
-    *   Node.js (v18+)
-    *   Express.js
-    *   MySQL2 (MySQL driver)
-    *   jsonwebtoken (for JWT handling)
-    *   bcryptjs (for password hashing)
-*   **Database:**
-    *   MySQL
+### Frontend
+- React 19.0.0
+- TypeScript
+- TailwindCSS 4.0.16
+- Vite 6.2.0
+- React Router DOM 7.4.0
 
-## Project Structure (Simplified)
+### Backend
+- Node.js
+- MySQL
+- Express.js
+- JWT Authentication
+- Multer (for file uploads)
+
+### Development Tools
+- ESLint
+- TypeScript
+- Vite
+- SWC
+
+## Project Structure
 
 ```
 espressolane/
-├── public/               # Static assets
-├── src/
-│   ├── assets/           # Images, fonts, etc.
-│   ├── pages/            # Page-level components (routed)
-│   ├── types.ts           # TypeScript type definitions
-│   ├── App.tsx           # Main application component with routing
-│   ├── main.tsx          # Entry point of the React application
-│   └── vite-env.d.ts     # Vite environment types
-├── server/
-│   ├── db.js             # Database connection setup (MySQL)
-│   └── server.js         # Express server setup and entry point
-├── .env.example          # Environment variable template for server
-├── .eslintrc.cjs         # ESLint configuration
-├── .gitignore
-├── index.html            # Main HTML file for Vite
-├── package.json          # Frontend dependencies and scripts
-├── README.md             # This file
-├── tailwind.config.js    # Tailwind CSS configuration
-└── tsconfig.json         # TypeScript configuration (frontend)
-└── tsconfig.node.json    # TypeScript configuration (Vite specific)
+├── src/                    # Frontend source code
+│   ├── components/        # Reusable components
+│   ├── pages/            # Page components
+│   ├── types.ts          # TypeScript type definitions
+│   └── utils/            # Utility functions
+├── backend/              # Backend source code
+│   ├── server.js        # Main server file
+│   └── db.js            # Database configuration
+├── uploads/             # File upload directory
+├── public/              # Static assets
+└── config/             # Configuration files
 ```
 
-## Setup and Installation
+## Getting Started
 
 ### Prerequisites
-*   Node.js (v18+ recommended)
-*   npm (comes with Node.js) or yarn
-*   MySQL Server
+- Node.js (v18 or higher)
+- MySQL (v8.0 or higher)
+- npm or yarn
 
-### Backend Setup
-1.  Navigate to the `server` directory: `cd server`
-2.  Install dependencies: `npm install` (or `yarn install`)
-3.  Create a `.env` file in the `server` directory by copying `.env.example`.
-4.  Update the `.env` file with your MySQL database credentials and a `JWT_SECRET`.
-    ```env
-    DB_HOST=localhost
-    DB_USER=your_mysql_user
-    DB_PASSWORD=your_mysql_password
-    DB_NAME=espressolane_db # or your chosen database name
-    JWT_SECRET=your_very_secret_jwt_key_here
-    PORT=3001 # Or any port you prefer for the backend
-    ```
-5.  Ensure your MySQL server is running and you have created the database specified in `.env`.
-    *   You might need to run the SQL schema initialization script if one is provided (e.g., `schema.sql`) or set up tables manually based on `server/models/*` and `server/routes/*` if no script exists yet. (Currently, tables are expected to exist as per API logic).
-6.  Start the backend server: `npm start` (or `node server.js`)
-    *   The server typically runs on `http://localhost:3001`.
+### Installation
 
-### Frontend Setup
-1.  Navigate to the root project directory (if not already there): `cd ..` (if you were in `server`) or `cd espressolane`
-2.  Install dependencies: `npm install` (or `yarn install`)
-3.  Start the frontend development server: `npm run dev`
-    *   The application will typically be available at `http://localhost:5173` (or another port specified by Vite).
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/espressolane.git
+cd espressolane
+```
 
-## Running the Application
-1.  Ensure the backend server is running (see Backend Setup).
-2.  Ensure the frontend development server is running (see Frontend Setup).
-3.  Open your browser and navigate to the frontend URL (e.g., `http://localhost:5173`).
+2. Install dependencies:
+```bash
+npm install
+```
 
-## API Endpoints Overview
+3. Set up environment variables:
+Create a `.env` file in the root directory with the following variables:
+```env
+DB_HOST=localhost
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=espressolane
+DB_PORT=3306
+JWT_SECRET=your_jwt_secret
+```
 
-The backend provides RESTful API endpoints under the `/api` prefix. Key resource endpoints include:
+4. Start the development server:
+```bash
+npm run dev
+```
 
-*   `/api/auth/login` (POST): User login.
-*   `/api/users/available` (GET): Get users not yet employees.
-*   `/api/employees` (GET, POST): Manage employees.
-*   `/api/employees/:id` (GET, PUT, DELETE): Manage a specific employee.
-*   `/api/products` (GET, POST): Manage products.
-*   `/api/products/:id` (GET, PUT, DELETE): Manage a specific product.
-*   `/api/categories` (GET, POST): Manage categories.
-*   `/api/categories/:id` (GET, PUT, DELETE): Manage a specific category.
-*   `/api/optiongroups` (GET, POST): Manage option groups.
-*   `/api/optiongroups/:id` (GET, PUT, DELETE): Manage a specific option group.
-*   `/api/options` (GET, POST): Manage options within groups.
-*   `/api/options/:id` (PUT, DELETE): Manage a specific option.
-*   `/api/orders` (GET, POST): Manage orders.
-*   `/api/orders/:id` (GET, PUT): Manage a specific order.
-*   `/api/rewards/definitions` (GET, POST): Manage reward definitions.
-*   `/api/rewards/definitions/:id` (PUT, DELETE): Manage a specific reward definition.
-*   `/api/rewards/my-rewards` (GET): Get rewards for the logged-in customer.
-*   `/api/profile` (GET, PUT): Manage user profile.
-*   `/api/settings/change-password` (POST): Change user password.
+## Configuration
 
-*Authentication*: Most endpoints require a JWT token passed in the `Authorization: Bearer <token>` header.
+### Database Configuration
+The database configuration is managed through environment variables in the `.env` file. The system uses MySQL with the following configuration options:
 
-## Database Schema Highlights
+- `DB_HOST`: Database host
+- `DB_USER`: Database user
+- `DB_PASSWORD`: Database password
+- `DB_NAME`: Database name
+- `DB_PORT`: Database port
 
-Key tables in the MySQL database (`espressolane_db` or as configured):
-*   `Users`: Stores user accounts (id, name, email, password_hash, role).
-*   `Employees`: Stores employee-specific details, linked to `Users` (employee_internal_id, user_id, employee_id_code, position, status, phone_number, hire_date).
-*   `Products`: Menu items (product_id, name, description, price, category_id, image_url, availability_status).
-*   `Categories`: Product categories (category_id, name, description).
-*   `OptionGroups`: Groups of choices for products (option_group_id, name, selection_type - e.g., 'single', 'multiple').
-*   `Options`: Individual choices within an OptionGroup (option_id, option_group_id, name, additional_price).
-*   `ProductOptionGroups`: Links products to option groups (product_id, option_group_id).
-*   `Orders`: Customer orders (order_id, user_id, order_date, total_amount, status, payment_method, delivery_address, notes).
-*   `OrderItems`: Items within an order (order_item_id, order_id, product_id, quantity, unit_price, subtotal).
-*   `OrderItemOptions`: Selected options for an order item.
-*   `RewardsDefinitions`: Defines available rewards (reward_definition_id, name, points_required, description, discount_amount, discount_percentage).
-*   `CustomerRewards`: Tracks customer points and redeemed rewards (customer_reward_id, user_id, points_balance).
+### File Upload Configuration
+The system uses the `uploads` directory for storing uploaded files. Configure the following in your environment:
 
-## Current Development Focus & TODOs
+- Maximum file size: 5MB
+- Allowed file types: JPEG, PNG, GIF, WebP
+- Storage path: `/uploads`
 
-*   **Phase 1: Critical Security & Core Backend Implementation (In Progress)**
-    1.  **Backend for Core Missing CRUD Operations:** (Largely complete for Menu, Employees, Orders, Rewards)
-    2.  **Backend Input Validation:** (Partially implemented, ongoing).
-    3.  **Backend Authorization:** (Implemented for most routes, ongoing review).
-    4.  **Frontend for Core Missing CRUD Operations:**
-        *   Employee Page: Add/Edit Employee modal flow (implemented, minor refinements needed).
-        *   Order Management: UI for status updates (implemented).
-        *   Menu Editing: UI for Products, Categories, Option Groups (implemented).
-        *   Rewards Editing: UI for Reward Definitions (implemented).
-*   **Phase 2: Enhancements & User Experience**
-    *   Refine UI/UX across all modules.
-    *   Implement real-time updates (e.g., for order status using WebSockets).
-    *   Inventory Management module.
-    *   Advanced Reporting and Analytics.
-    *   Full-text search enhancements.
-*   **Phase 3: Stability & Performance**
-    *   Comprehensive testing (unit, integration, E2E).
-    *   Performance optimization (database queries, API response times, frontend rendering).
-    *   Security hardening (penetration testing, dependency audits).
-    *   Deployment strategy and CI/CD pipeline.
+## API Documentation
 
----
+### Authentication Endpoints
+- `POST /api/auth/login` - User login
+- `POST /api/auth/signup` - User registration
+- `POST /api/auth/forgot-password` - Password reset request
+- `POST /api/auth/reset-password` - Password reset
 
-*This README provides a snapshot of the project. Refer to commit history and code for the most detailed information.*
+### Order Endpoints
+- `GET /api/orders` - Get all orders
+- `POST /api/orders` - Create new order
+- `PUT /api/orders/:id` - Update order status
+- `DELETE /api/orders/:id` - Archive order
+
+### Menu Endpoints
+- `GET /api/products` - Get all products
+- `POST /api/products` - Add new product
+- `PUT /api/products/:id` - Update product
+- `DELETE /api/products/:id` - Delete product
+
+### Employee Endpoints
+- `GET /api/employees` - Get all employees
+- `POST /api/employees` - Add new employee
+- `PUT /api/employees/:id` - Update employee
+- `DELETE /api/employees/:id` - Delete employee
+
+### Rewards Endpoints
+- `GET /api/rewards` - Get all rewards
+- `POST /api/rewards` - Create new reward
+- `PUT /api/rewards/:id` - Update reward
+- `DELETE /api/rewards/:id` - Delete reward
+
+## User Roles
+
+The system supports multiple user roles with different permissions:
+
+### Manager
+- Full system access
+- Employee management
+- Menu management
+- Order management
+- Reports and analytics
+
+### Employee
+- Order processing
+- Basic customer service
+- Limited menu management
+- View reports
+
+### Cashier
+- Order processing
+- Payment handling
+- Basic customer service
+
+### Cook
+- Order preparation
+- Menu item status updates
+- Inventory management
+
+### Customer
+- Place orders
+- View order history
+- Manage profile
+- Use loyalty rewards
+
+## Features in Detail
+
+### Order Management
+- Real-time order tracking
+- Custom order options
+- Status updates
+- Order history
+- Analytics and reporting
+
+### Menu Management
+- Product categories
+- Custom options and modifiers
+- Price management
+- Availability control
+- Image management
+
+### Employee Management
+- Role-based access
+- Scheduling
+- Performance tracking
+- Profile management
+
+### Customer Loyalty
+- Points system
+- Voucher management
+- Tier benefits
+- Referral rewards
+
+## Development
+
+### Code Style
+The project uses ESLint for code style enforcement. Run the linter:
+```bash
+npm run lint
+```
+
+### TypeScript
+The project is written in TypeScript. Type definitions are available in `src/types.ts`.
+
+### Testing
+Run tests:
+```bash
+npm test
+```
+
+## Deployment
+
+### Production Build
+Create a production build:
+```bash
+npm run build
+```
 
