@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 // Import shared types
 import { Product, ProductOption, OptionCategory, BackendOptionGroup } from '../types'; 
+import ImageUpload from '../components/ImageUpload';
+import { uploadImage } from '../utils/imageUpload';
 
 // Interface for the category data fetched from the backend
 interface FetchedCategory {
@@ -16,24 +18,28 @@ interface FetchedCategory {
 
 // Product Form State Interface (Uses imported OptionCategory)
 interface ProductFormData {
-    categoryId: number | null; // Ensure this replaces productType
+    categoryId: number | null;
     name: string;
-    price: string; 
-    image: File | null; 
-    imagePreviewUrl?: string; 
-    description?: string; // Added description
-    optionCategories: OptionCategory[]; 
+    price: string;
+    image: File | null;
+    imagePreviewUrl: string;
+    description: string;
+    optionCategories: OptionCategory[];
+    availability: 'available' | 'unavailable';
+    tags: string[];
 }
 
-// Default empty form state (Uses imported OptionCategory)
+// Default empty form state
 const defaultFormState: ProductFormData = {
-    categoryId: null, // Ensure this is set
+    categoryId: null,
     name: '',
     price: '',
     image: null,
     imagePreviewUrl: '/src/assets/product.png',
-    description: '', // Initialize description
-    optionCategories: [], 
+    description: '',
+    optionCategories: [],
+    availability: 'available',
+    tags: []
 };
 
 const EditMenu: React.FC = () => {
@@ -57,6 +63,10 @@ const EditMenu: React.FC = () => {
   // Use activeCategoryId for filtering logic
   const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null); 
   
+  // --- New State for Availability Filter ---
+  type AvailabilityFilterType = 'all' | 'available' | 'unavailable';
+  const [availabilityFilter, setAvailabilityFilter] = useState<AvailabilityFilterType>('all');
+
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null); // Track selected product for editing
   const [selectedProductOptionsLoading, setSelectedProductOptionsLoading] = useState<boolean>(false);
   const [selectedProductOptionsError, setSelectedProductOptionsError] = useState<string | null>(null);
@@ -75,6 +85,13 @@ const EditMenu: React.FC = () => {
   const [newCategoryImageFile, setNewCategoryImageFile] = useState<File | null>(null);
   const [newCategoryImagePreviewUrl, setNewCategoryImagePreviewUrl] = useState<string | undefined>(undefined);
   const categoryImageInputRef = useRef<HTMLInputElement>(null);
+
+  // --- State for Editing Category ---
+  const [editingCategory, setEditingCategory] = useState<FetchedCategory | null>(null);
+  const [editCategoryNameInput, setEditCategoryNameInput] = useState('');
+  const [editCategoryImageFile, setEditCategoryImageFile] = useState<File | null>(null);
+  const [editCategoryImagePreviewUrl, setEditCategoryImagePreviewUrl] = useState<string | undefined>(undefined);
+  const editCategoryImageInputRef = useRef<HTMLInputElement>(null);
 
   // --- New State for Backend Option Groups ---
   const [optionGroups, setOptionGroups] = useState<BackendOptionGroup[]>([]);
@@ -99,6 +116,7 @@ const EditMenu: React.FC = () => {
   const [isAddingOption, setIsAddingOption] = useState<boolean>(false);
   const [editingOption, setEditingOption] = useState<ProductOption | null>(null);
   const [optionFormLabel, setOptionFormLabel] = useState('');
+  const [optionFormValue, setOptionFormValue] = useState(''); // New state for option value
   const [optionFormPriceModifier, setOptionFormPriceModifier] = useState('');
 
   // Initialize form productType with activeCategory when component loads or categories change
@@ -111,14 +129,30 @@ const EditMenu: React.FC = () => {
     }
   }, [fetchedCategories]); // Rerun when categories change
 
-  // Filter products based on the selected category ID
-  const filteredProducts = activeCategoryId === null
-    ? products // Show all if no category is selected (or handle as needed)
-    : products.filter(p => { 
-        // Need to map product category name back to ID for filtering
+  // Filter products based on the selected category ID OR availability filter
+  const filteredProducts = (() => {
+    let productsToFilter = [...products]; // Start with all products
+
+    // Apply availability filter first if it's not 'all'
+    if (availabilityFilter === 'available') {
+      productsToFilter = productsToFilter.filter(p => p.availability === 'available' || p.availability === undefined);
+    } else if (availabilityFilter === 'unavailable') {
+      productsToFilter = productsToFilter.filter(p => p.availability === 'unavailable');
+    }
+
+    // Then, if a specific category is selected (and availabilityFilter was 'all' or has already been applied)
+    // apply category filtering. If availability filter is active, category selection is ignored for now.
+    if (availabilityFilter === 'all' && activeCategoryId !== null) {
+      productsToFilter = productsToFilter.filter(p => {
         const productCategoryId = fetchedCategories.find(cat => cat.name === p.category)?.category_id;
-        return productCategoryId === activeCategoryId; 
+        return productCategoryId === activeCategoryId;
       });
+    }
+    // If availabilityFilter is active (not 'all'), activeCategoryId is effectively ignored for this iteration of filtering logic.
+    // The display text below will need to reflect this.
+
+    return productsToFilter;
+  })();
 
   // Handle selecting a product to edit (Uses imported Product, OptionCategory)
   const handleSelectProduct = (product: Product) => {
@@ -131,19 +165,21 @@ const EditMenu: React.FC = () => {
     // Find the category ID based on the product's category name
     const selectedCategoryId = fetchedCategories.find(cat => cat.name === product.category)?.category_id || null;
     setFormData({
-        categoryId: selectedCategoryId, // Correctly assign the found ID
+        categoryId: selectedCategoryId,
         name: product.name,
         price: product.price.toString(),
-        image: null, 
-        imagePreviewUrl: product.image || '/src/assets/product.png', 
-        description: product.description,
+        image: null,
+        imagePreviewUrl: product.image || '/src/assets/product.png',
+        description: product.description || '',
         optionCategories: copiedOptionCategories,
+        availability: product.availability || 'available',
+        tags: product.tags || []
     });
-     console.log("Selected Product:", product);
+    console.log("Selected Product:", product);
   };
 
   // Handle form input changes
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
       const { name, value } = e.target;
       setFormData(prev => ({ ...prev, [name]: value }));
   };
@@ -173,8 +209,11 @@ const EditMenu: React.FC = () => {
       if (newCategoryImagePreviewUrl && newCategoryImagePreviewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(newCategoryImagePreviewUrl);
       }
+      if (editCategoryImagePreviewUrl && editCategoryImagePreviewUrl.startsWith('blob:')) { // Clean up edit preview
+        URL.revokeObjectURL(editCategoryImagePreviewUrl);
+      }
     };
-  }, [newCategoryImagePreviewUrl]);
+  }, [newCategoryImagePreviewUrl, editCategoryImagePreviewUrl]); // Add editCategoryImagePreviewUrl
 
   // --- Fetch Categories from Backend --- 
   useEffect(() => {
@@ -266,12 +305,11 @@ const EditMenu: React.FC = () => {
           name: p.name,
           price: parseFloat(p.base_price),
           image: p.image_url || '/src/assets/product.png',
-          category: p.category_name, // Use category_name from JOIN
-          description: p.description,
-          // TODO: Fetch and map OptionCategories separately if needed
-          optionCategories: [], // Placeholder - needs separate fetch/mapping
-          availability: p.availability,
-          tags: p.tags ? p.tags.split(',') : [],
+          category: p.category_name,
+          description: p.description || '',
+          optionCategories: [], // Will be populated later
+          availability: p.availability || 'available',
+          tags: p.tags ? p.tags.split(',').filter(Boolean) : []
         }));
         setProducts(mappedProducts);
       } catch (error: any) {
@@ -440,6 +478,10 @@ const EditMenu: React.FC = () => {
           alert("Please enter a valid, non-negative price.");
           return;
       }
+      if (!formData.description.trim()) {
+          alert("Product description is required.");
+          return;
+      }
 
       const apiEndpoint = isAdding ? 'http://localhost:3001/api/products' : `http://localhost:3001/api/products/${selectedProduct?.id}`;
       const method = isAdding ? 'POST' : 'PUT';
@@ -455,28 +497,50 @@ const EditMenu: React.FC = () => {
 
       // --- Prepare Body and Final Headers --- 
       let requestBody;
-      if (formData.image) { // Using FormData
-        const productFormData = new FormData();
-        productFormData.append('name', formData.name.trim());
-        productFormData.append('base_price', formData.price);
-        if (formData.categoryId !== null) { productFormData.append('category_id', String(formData.categoryId)); }
-        productFormData.append('description', formData.description || "Placeholder description");
-        const optionGroupIds = formData.optionCategories.map(cat => parseInt(cat.id)).filter(id => !isNaN(id));
-        optionGroupIds.forEach(id => productFormData.append('option_group_ids[]', String(id)));
-        productFormData.append('productImage', formData.image);
-        requestBody = productFormData;
-        // DO NOT set Content-Type for FormData, browser handles it.
-      } else { // Using JSON
-        headers['Content-Type'] = 'application/json'; // Add Content-Type for JSON
+      if (formData.image instanceof File) {
+        // First upload the image
+        const imageFormData = new FormData();
+        imageFormData.append('image', formData.image);
+        
+        const token = localStorage.getItem('authToken');
+        const imageUploadResponse = await fetch('http://localhost:3001/api/upload/image', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: imageFormData
+        });
+
+        if (!imageUploadResponse.ok) {
+          throw new Error('Failed to upload image');
+        }
+
+        const imageData = await imageUploadResponse.json();
+        
+        // Now send the product update with the new image URL
+        headers['Content-Type'] = 'application/json';
         const productDataPayload = {
             name: formData.name.trim(),
-            base_price: parseFloat(formData.price) || 0,
+            base_price: parseFloat(formData.price),
             category_id: formData.categoryId,
-            image_url: formData.imagePreviewUrl && !formData.imagePreviewUrl.startsWith('blob:')
-                         ? formData.imagePreviewUrl
-                         : (selectedProduct && !isAdding ? selectedProduct.image : null),
-            description: formData.description || "Placeholder description",
-            option_group_ids: formData.optionCategories.map(cat => parseInt(cat.id)).filter(id => !isNaN(id)),
+            image_url: imageData.url, // Use the URL from the image upload response
+            description: formData.description.trim(),
+            availability: formData.availability,
+            tags: formData.tags,
+            option_group_ids: formData.optionCategories.map(cat => parseInt(cat.id)).filter(id => !isNaN(id))
+        };
+        requestBody = JSON.stringify(productDataPayload);
+      } else {
+        // No new image, just update other fields
+        headers['Content-Type'] = 'application/json';
+        const productDataPayload = {
+            name: formData.name.trim(),
+            base_price: parseFloat(formData.price),
+            category_id: formData.categoryId,
+            description: formData.description.trim(),
+            availability: formData.availability,
+            tags: formData.tags,
+            option_group_ids: formData.optionCategories.map(cat => parseInt(cat.id)).filter(id => !isNaN(id))
         };
         requestBody = JSON.stringify(productDataPayload);
       }
@@ -523,10 +587,10 @@ const EditMenu: React.FC = () => {
             price: parseFloat(savedProductData.base_price),
             image: savedProductData.image_url || '/src/assets/product.png',
             category: fetchedCategories.find(c => c.category_id === savedProductData.category_id)?.name || 'Unknown',
-            description: savedProductData.description,
+            description: savedProductData.description || '',
             optionCategories: formData.optionCategories,
-            availability: savedProductData.availability,
-            tags: savedProductData.tags ? (Array.isArray(savedProductData.tags) ? savedProductData.tags : String(savedProductData.tags).split(',')) : [],
+            availability: savedProductData.availability || 'available',
+            tags: savedProductData.tags ? savedProductData.tags.split(',').filter(Boolean) : []
         };
         if (isAdding) {
             setProducts(prev => [productForState, ...prev]);
@@ -535,7 +599,12 @@ const EditMenu: React.FC = () => {
         } else {
             setProducts(prev => prev.map(p => p.id === productForState.id ? productForState : p));
             setSelectedProduct(productForState);
-            setFormData(prev => ({ ...prev, image: null, imagePreviewUrl: productForState.image }));
+            setFormData(prev => ({
+                ...prev,
+                image: null,
+                imagePreviewUrl: productForState.image,
+                tags: productForState.tags || []
+            }));
         }
         alert(`Product ${isAdding ? 'added' : 'updated'} successfully!`);
 
@@ -554,6 +623,9 @@ const EditMenu: React.FC = () => {
       setNewOptionValues({});
       setEditingCategoryName({});
       setEditingOptionLabel({});
+      setEditingCategory(null); // Reset editing category state
+      setEditCategoryImageFile(null);
+      setEditCategoryImagePreviewUrl(undefined);
   };
 
   // Handle starting to add a new product
@@ -627,74 +699,54 @@ const EditMenu: React.FC = () => {
   };
 
   // Handle adding a new category
-  const handleAddCategory = async () => { // Make async
-      if (!newCategoryInput.trim()) return;
-      
-      const endpoint = 'http://localhost:3001/api/categories';
-      let requestBody;
-      const token = localStorage.getItem('authToken'); // Get token
-      const headers: HeadersInit = {}; // Initialize headers object
+  const handleAddCategory = async () => {
+    if (!newCategoryInput.trim()) return;
+    
+    const endpoint = 'http://localhost:3001/api/categories';
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+    const formData = new FormData();
+    formData.append('name', newCategoryInput.trim());
+    if (newCategoryImageFile) {
+      formData.append('image', newCategoryImageFile);
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          ...headers
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
-      const fetchOptions: RequestInit = {
-          method: 'POST',
-          headers: headers, // Assign headers
-      };
+      const createdCategory = await response.json();
+      setFetchedCategories(prev => [...prev, createdCategory]);
+      setActiveCategoryId(createdCategory.category_id);
 
-      if (newCategoryImageFile) {
-        const categoryFormData = new FormData();
-        categoryFormData.append('name', newCategoryInput.trim());
-        categoryFormData.append('categoryImage', newCategoryImageFile); 
-        requestBody = categoryFormData;
-        // Content-Type set by browser for FormData
-      } else {
-        // Send as JSON if no new image file
-        headers['Content-Type'] = 'application/json'; // Add Content-Type for JSON
-        fetchOptions.headers = headers; // Re-assign updated headers
-
-        requestBody = JSON.stringify({
-          name: newCategoryInput.trim(),
-          image_url: null 
-        });
+      // Reset form states
+      setNewCategoryInput('');
+      setNewCategoryImageFile(null);
+      if (newCategoryImagePreviewUrl && newCategoryImagePreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(newCategoryImagePreviewUrl);
       }
-      fetchOptions.body = requestBody;
+      setNewCategoryImagePreviewUrl(undefined);
+      setIsAddingCategory(false);
+      alert('Category added successfully!');
 
-      try {
-        const response = await fetch(endpoint, fetchOptions); // Now includes Authorization header
-
-        if (!response.ok) {
-            const errorData = await response.json(); // Attempt to parse error response
-            throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-        }
-
-        const createdCategory = await response.json();
-        console.log("Category Added:", createdCategory);
-
-        // Update local state with the category returned from the API
-        // Ensure createdCategory matches FetchedCategory structure (e.g., category_id, name, image_url)
-        setFetchedCategories(prev => [...prev, createdCategory]);
-        // Optionally, set the new category as active
-        setActiveCategory(createdCategory.name);
-        setActiveCategoryId(createdCategory.category_id);
-
-        // Reset form states
-        setNewCategoryInput('');
-        setNewCategoryImageFile(null);
-        if (newCategoryImagePreviewUrl && newCategoryImagePreviewUrl.startsWith('blob:')) {
-           URL.revokeObjectURL(newCategoryImagePreviewUrl); // Clean up blob
-        }
-        setNewCategoryImagePreviewUrl(undefined);
-        setIsAddingCategory(false);
-        alert('Category added successfully!');
-
-      } catch (error: any) {
-          console.error("Failed to add category:", error);
-          alert(`Error adding category: ${error.message}`);
-          // Do not reset form on error, allow user to retry/correct if appropriate
-      }
+    } catch (error: any) {
+      console.error("Failed to add category:", error);
+      alert(`Error adding category: ${error.message}`);
+    }
   };
 
   const handleDeleteCategory = async (categoryToDeleteId: number, categoryToDeleteName: string) => {
@@ -754,6 +806,70 @@ const EditMenu: React.FC = () => {
        }
   };
 
+  // --- NEW: Function to handle starting category edit ---
+  const handleStartEditCategory = (category: FetchedCategory) => {
+    setEditingCategory(category);
+    setEditCategoryNameInput(category.name);
+    setEditCategoryImagePreviewUrl(category.image_url || undefined);
+    setEditCategoryImageFile(null); // Reset file input
+    setIsAddingCategory(false); // Ensure add category form is hidden
+  };
+
+  // --- NEW: Function to handle category update submission ---
+  const handleUpdateCategory = async () => {
+    if (!editingCategory || !editCategoryNameInput.trim()) {
+      alert("Category name cannot be empty.");
+      return;
+    }
+
+    const endpoint = `http://localhost:3001/api/categories/${editingCategory.category_id}`;
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const formData = new FormData();
+    formData.append('name', editCategoryNameInput.trim());
+    
+    if (editCategoryImageFile) {
+      formData.append('image', editCategoryImageFile);
+    } else if (editCategoryImagePreviewUrl === null) {
+      // If image preview is null, it means we want to remove the image
+      formData.append('image_url', 'null');
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          ...headers
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
+        throw new Error(errorData.message || 'Failed to update category.');
+      }
+
+      const updatedCategory: FetchedCategory = await response.json();
+      setFetchedCategories(prev => prev.map(cat => cat.category_id === updatedCategory.category_id ? updatedCategory : cat));
+      
+      if (activeCategoryId === editingCategory.category_id) {
+        setActiveCategory(updatedCategory.name);
+      }
+
+      setEditingCategory(null);
+      setEditCategoryImageFile(null);
+      setEditCategoryImagePreviewUrl(undefined);
+      alert('Category updated successfully!');
+    } catch (error: any) {
+      console.error("Failed to update category:", error);
+      alert(`Error updating category: ${error.message}`);
+    }
+  };
+
   // --- Fetch Options for Selected Option Group ---
   useEffect(() => {
     if (!selectedOptionGroupForOptions) {
@@ -779,8 +895,25 @@ const EditMenu: React.FC = () => {
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const data: ProductOption[] = await response.json(); // Assuming backend returns ProductOption compatible structure
-        setOptionsForSelectedGroup(data.map(opt => ({ ...opt, id: String(opt.id) }))); // Ensure IDs are strings for frontend consistency
+        const data: any[] = await response.json(); // Raw data from API
+        // Correctly map API response (option_id, label, price_modifier) to ProductOption type (id, label, priceModifier)
+        setOptionsForSelectedGroup(data.map(apiOpt => {
+          if (apiOpt.option_id === null || apiOpt.option_id === undefined) {
+            console.warn('[EditMenu] Fetched option missing valid option_id:', apiOpt);
+            return {
+              id: `invalid-${Date.now()}`,
+              label: apiOpt.label || 'Invalid Option (Missing ID)',
+              priceModifier: parseFloat(apiOpt.price_modifier) || 0,
+              value: apiOpt.value || ''
+            };
+          }
+          return {
+            id: String(apiOpt.option_id),       // Map option_id to id
+            label: apiOpt.label,
+            priceModifier: parseFloat(apiOpt.price_modifier) || 0, // Ensure number
+            value: apiOpt.value || '' // Handle optional value field
+          };
+        }).filter(opt => opt && opt.id && !opt.id.startsWith('invalid-'))); // Filter out any clearly invalid ones
       } catch (error: any) {
         console.error("Failed to fetch options for group:", error);
         setOptionsError(`Failed to load options: ${error.message}`);
@@ -792,7 +925,65 @@ const EditMenu: React.FC = () => {
     fetchOptionsForGroup();
   }, [selectedOptionGroupForOptions]);
 
-  // --- NEW: Function to handle saving option group edits ---
+  // --- NEW: Function to handle ADDING a new option group via API ---
+  const handleAddOptionGroup = async () => {
+    if (!newOptionGroupName.trim()) {
+      alert("Option group name cannot be empty.");
+      return;
+    }
+
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      const payload = {
+        name: newOptionGroupName.trim(),
+        selection_type: newOptionGroupSelectionType,
+        is_required: newOptionGroupIsRequired,
+      };
+      console.log('[EditMenu.tsx] Adding option group with payload:', payload);
+
+      const response = await fetch('http://localhost:3001/api/option-groups', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorMsg = `HTTP error! ${response.status}`;
+        try { 
+          const errData = await response.json(); 
+          errorMsg = errData.message || errorMsg; 
+        } catch(e){ /* Ignore parsing error if response not JSON */ }
+        throw new Error(errorMsg);
+      }
+
+      const createdGroupFromApi: BackendOptionGroup = await response.json();
+      console.log('[EditMenu.tsx] Received created group from API:', createdGroupFromApi);
+      
+      // Update local list of all option groups
+      setOptionGroups(prev => [...prev, createdGroupFromApi]);
+      
+      // Reset form and close add mode
+      setIsAddingOptionGroup(false);
+      setNewOptionGroupName('');
+      setNewOptionGroupSelectionType('radio');
+      setNewOptionGroupIsRequired(false);
+
+      alert('Option Group added successfully!');
+
+    } catch (err: any) {
+      console.error("Failed to add option group:", err);
+      alert(`Error adding option group: ${err.message}`);
+    }
+  };
+
+  // --- NEW: Function to handle saving option group edits --- 
   const handleUpdateOptionGroup = async (groupId: number) => {
     if (!editOptionGroupName.trim()) {
       alert("Option group name cannot be empty.");
@@ -862,6 +1053,251 @@ const EditMenu: React.FC = () => {
     }
   };
 
+  // --- NEW: Function to handle DELETING an option group via API ---
+  const handleDeleteOptionGroup = async (groupId: number) => {
+    if (!window.confirm('Are you sure you want to delete this option group? This might affect products using it.')) {
+      return;
+    }
+
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      console.log(`[EditMenu.tsx] Deleting option group with ID: ${groupId}`);
+
+      const response = await fetch(`http://localhost:3001/api/option-groups/${groupId}`, {
+        method: 'DELETE',
+        headers: headers,
+      });
+
+      if (!response.ok) {
+        let errorMsg = `HTTP error! ${response.status}`;
+        try { 
+          const errData = await response.json(); 
+          errorMsg = errData.message || errorMsg; 
+        } catch(e){ /* Ignore parsing error if response not JSON */ }
+        throw new Error(errorMsg);
+      }
+
+      // Update local list of all option groups
+      setOptionGroups(prev => prev.filter(og => og.option_group_id !== groupId));
+      
+      // If the deleted group was selected for managing options, clear that selection
+      if (selectedOptionGroupForOptions?.option_group_id === groupId) {
+        setSelectedOptionGroupForOptions(null);
+      }
+      // If the deleted group was being edited, clear that state
+      if (editingGroupId === groupId) {
+        setEditingGroupId(null);
+      }
+
+      alert('Option Group deleted successfully!');
+
+    } catch (err: any) {
+      console.error("Failed to delete option group:", err);
+      alert(`Error deleting option group: ${err.message}`);
+    }
+  };
+
+  // --- Function to ADD an Option to a specific Option Group ---
+  const handleAddOptionToGroup = async () => {
+    if (!selectedOptionGroupForOptions || !optionFormLabel.trim()) {
+      alert("Option label cannot be empty and an option group must be selected.");
+      return;
+    }
+
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const payload = {
+      option_group_id: selectedOptionGroupForOptions.option_group_id, 
+      label: optionFormLabel.trim(),
+      price_modifier: optionFormPriceModifier.trim() === '' ? null : parseFloat(optionFormPriceModifier),
+      value: optionFormValue.trim() || undefined, // Include value
+    };
+    console.log('[EditMenu] Adding option to group with payload:', payload); // Log payload
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/options`, { 
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+        console.error('[EditMenu] API Error adding option:', errData, 'Status:', response.status);
+        throw new Error(errData.message);
+      }
+
+      const newOptionFromApi = await response.json(); // Expects { option_id, label, price_modifier, value? }
+      console.log('[EditMenu] Received new option from API:', newOptionFromApi);
+
+      const newOptionForState: ProductOption = {
+        id: String(newOptionFromApi.option_id),
+        label: newOptionFromApi.label,
+        priceModifier: newOptionFromApi.price_modifier !== null && newOptionFromApi.price_modifier !== undefined ? parseFloat(newOptionFromApi.price_modifier) : undefined,
+        value: newOptionFromApi.value || '' 
+      };
+      console.log('[EditMenu] Prepared new option for state:', newOptionForState);
+
+      setOptionsForSelectedGroup(prev => [...prev, newOptionForState]);
+      console.log('[EditMenu] State `optionsForSelectedGroup` updated after add.');
+
+      setIsAddingOption(false);
+      setOptionFormLabel('');
+      setOptionFormValue(''); 
+      setOptionFormPriceModifier('');
+      alert('Option added successfully!');
+
+    } catch (err: any) {
+      console.error("[EditMenu] Failed to add option to group:", err);
+      alert(`Error adding option: ${err.message}`);
+    }
+  };
+
+  // --- Function to UPDATE an Option in a specific Option Group ---
+  const handleUpdateOptionInGroup = async () => {
+    if (!editingOption || !editingOption.id || editingOption.id === 'undefined' || !selectedOptionGroupForOptions || !optionFormLabel.trim()) {
+      alert("Required information for updating option is missing, or option ID is invalid.");
+      console.error('[EditMenu] Attempted to update option with invalid editingOption state:', editingOption, 'Selected Group:', selectedOptionGroupForOptions, 'Form Label:', optionFormLabel);
+      return;
+    }
+    console.log('[EditMenu] Starting update for option:', editingOption, 'with form label:', optionFormLabel);
+
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const payload = {
+      label: optionFormLabel.trim(),
+      price_modifier: optionFormPriceModifier.trim() === '' ? null : parseFloat(optionFormPriceModifier),
+      value: optionFormValue.trim() || undefined, // Include value
+    };
+    console.log(`[EditMenu] Updating option ${editingOption.id} with payload:`, payload);
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/options/${editingOption.id}`, { 
+        method: 'PUT',
+        headers: headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+        console.error('[EditMenu] API Error updating option:', errData, 'Status:', response.status);
+        throw new Error(errData.message);
+      }
+
+      const updatedOptionFromApi = await response.json(); // Expects { option_id, label, price_modifier, option_group_id, value? }
+      console.log('[EditMenu] Received updated option from API:', updatedOptionFromApi);
+
+      const updatedOptionForState: ProductOption = {
+        id: String(updatedOptionFromApi.option_id),
+        label: updatedOptionFromApi.label,
+        priceModifier: updatedOptionFromApi.price_modifier !== null && updatedOptionFromApi.price_modifier !== undefined ? parseFloat(updatedOptionFromApi.price_modifier) : undefined,
+        value: updatedOptionFromApi.value || '' 
+      };
+      console.log('[EditMenu] Prepared updated option for state:', updatedOptionForState);
+
+      setOptionsForSelectedGroup(prev => prev.map(opt => opt.id === updatedOptionForState.id ? updatedOptionForState : opt));
+      console.log('[EditMenu] State `optionsForSelectedGroup` updated after update.');
+
+      setIsAddingOption(false); 
+      setEditingOption(null);   
+      setOptionFormLabel('');
+      setOptionFormValue(''); 
+      setOptionFormPriceModifier('');
+      alert('Option updated successfully!');
+
+    } catch (err: any) {
+      console.error("[EditMenu] Failed to update option in group:", err);
+      alert(`Error updating option: ${err.message}`);
+    }
+  };
+
+  // --- Function to DELETE an Option from a specific Option Group ---
+  const handleDeleteOptionFromGroup = async (optionId: string | undefined) => {
+    if (!optionId || !selectedOptionGroupForOptions) {
+      alert("Option ID or selected group is missing for deletion.");
+      return;
+    }
+    if (!window.confirm("Are you sure you want to delete this option?")) return;
+
+    const token = localStorage.getItem('authToken');
+    const headers: HeadersInit = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    try {
+      const response = await fetch(`http://localhost:3001/api/options/${optionId}`, {
+        method: 'DELETE',
+        headers: headers,
+      });
+
+      if (!response.ok) {
+        // Handle cases where backend might send non-JSON error (e.g., plain text or just status)
+        let errorDetail = `HTTP error ${response.status}`;
+        if (response.headers.get("content-type")?.includes("application/json")) {
+            const errData = await response.json().catch(() => (null)); // Avoid crashing if JSON parse fails
+            errorDetail = errData?.message || errorDetail;
+        } else {
+            const textError = await response.text().catch(() => (null));
+            errorDetail = textError || errorDetail;
+        }
+        throw new Error(errorDetail);
+      }
+
+      // If DELETE was successful, backend might send back 204 No Content or a success message.
+      // We don't strictly need to parse a body for a successful DELETE.
+      
+      setOptionsForSelectedGroup(prev => prev.filter(opt => opt.id !== optionId));
+      alert('Option deleted successfully!');
+
+    } catch (err: any) {
+      console.error("Failed to delete option from group:", err);
+      alert(`Error deleting option: ${err.message}`);
+    }
+  };
+
+  const handleProductImageChange = async (file: File | null, previewUrl: string) => {
+      try {
+          let imageUrl = previewUrl;
+          if (file) {
+              imageUrl = await uploadImage(file);
+          }
+          setFormData(prev => ({
+              ...prev,
+              image: file,
+              imagePreviewUrl: imageUrl
+          }));
+      } catch (err: any) {
+          console.error('Error updating product image:', err);
+          setError(err.message || 'Failed to update product image');
+      }
+  };
+
+  const handleCategoryImageChange = async (file: File | null, previewUrl: string) => {
+      try {
+          let imageUrl = previewUrl;
+          if (file) {
+              imageUrl = await uploadImage(file);
+          }
+          setEditingCategory(prev => prev ? {
+              ...prev,
+              image_url: imageUrl
+          } : null);
+      } catch (err: any) {
+          console.error('Error updating category image:', err);
+          setError(err.message || 'Failed to update category image');
+      }
+  };
+
+  const [error, setError] = useState<string | null>(null);
+
   return (
     <div className="flex gap-6 h-[calc(100vh-theme(space.24))]">
       {/* Main Content Area - Product List */}
@@ -878,75 +1314,164 @@ const EditMenu: React.FC = () => {
           </div>
         </div>
 
-        {/* Category Filters - Now dynamic */}
+        {/* Category Filters */}
         <div className="flex space-x-2 mb-6 items-center flex-wrap">
-          {categoriesLoading && <p className="text-gray-500">Loading categories...</p>}
-          {categoriesError && <p className="text-red-500">{categoriesError}</p>}
-          {!categoriesLoading && !categoriesError && fetchedCategories.map(category => (
-          <button
+          {/* Availability Filters */}
+          {(['all', 'available', 'unavailable'] as AvailabilityFilterType[]).map(filterType => (
+            <button
+              key={filterType}
+              onClick={() => {
+                setAvailabilityFilter(filterType);
+                setActiveCategoryId(null);
+                handleCancel();
+              }}
+              className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors mb-2 ${
+                availabilityFilter === filterType
+                  ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                  : 'bg-white text-gray-600 hover:bg-gray-50 border border-stone-200'
+              }`}
+            >
+              {filterType.charAt(0).toUpperCase() + filterType.slice(1)} Products
+            </button>
+          ))}
+
+          <div className="h-6 border-l border-gray-300 mx-2 mb-2"></div>
+
+          {/* Categories */}
+          <div className="flex flex-wrap gap-2">
+            {categoriesLoading && <p className="text-gray-500">Loading categories...</p>}
+            {categoriesError && <p className="text-red-500">{categoriesError}</p>}
+            {!categoriesLoading && !categoriesError && fetchedCategories.map(category => (
+              <div
+                role="button"
+                tabIndex={0}
                 key={category.category_id}
-                 onClick={() => {
-                    setActiveCategoryId(category.category_id); // Set ID instead of name
-                    handleCancel(); 
-                 }}
-                 className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors mb-2 ${ 
-                    activeCategoryId === category.category_id // Compare IDs
-                        ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                        : 'bg-white text-gray-600 hover:bg-gray-50 border border-stone-200'
-                 }`}
-             >
-               {/* TODO: Use category.image_url here if available */}
-               {category.name}
-               {/* TODO: Update Delete Category logic to use category.category_id and require API call */} 
-               {!isAddingCategory && fetchedCategories.length > 1 && ( 
-          <button
-                       onClick={(e) => { 
-                        e.stopPropagation(); 
-                        handleDeleteCategory(category.category_id, category.name); // Pass ID and Name
-                       }}
-                    title={`Delete category "${category.name}"`}
-                       className="ml-1.5 p-0.5 rounded-full text-red-400 hover:bg-red-100 hover:text-red-600 transition-colors">
-                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                onClick={() => {
+                  setActiveCategoryId(category.category_id);
+                  setAvailabilityFilter('all');
+                  handleCancel();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    setActiveCategoryId(category.category_id);
+                    setAvailabilityFilter('all');
+                    handleCancel();
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors mb-2 cursor-pointer ${
+                  activeCategoryId === category.category_id
+                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                    : 'bg-white text-gray-600 hover:bg-gray-50 border border-stone-200'
+                }`}
+              >
+                {/* Category Image */}
+                {category.image_url && (
+                  <img
+                    src={category.image_url}
+                    alt={category.name}
+                    className="w-6 h-6 object-cover rounded"
+                  />
+                )}
+                <span>{category.name}</span>
+                <div className="flex items-center">
+                  {!isAddingCategory && !editingCategory && (
+                    <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEditCategory(category);
+                        }}
+                        title={`Edit category "${category.name}"`}
+                        className="p-1 rounded-full text-blue-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
                         </svg>
-          </button>
-               )}
-          </button>
-           ))}
-           
-           {/* Add Category UI Toggle */} 
-           {!isAddingCategory ? (
-          <button
-                   onClick={() => setIsAddingCategory(true)} 
-                   className="ml-2 text-emerald-600 hover:text-emerald-800 text-sm font-medium mb-2 p-2 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors">
-                   + Add Category
-          </button>
-           ) : (
-                <div className="flex items-center space-x-2 mb-2 ml-2 p-2 border border-emerald-200 rounded-lg bg-emerald-50/50">
-                    <input 
-                        type="text"
-                         placeholder="New category name..."
-                         value={newCategoryInput}
-                         onChange={(e) => setNewCategoryInput(e.target.value)}
-                         onKeyDown={(e) => { if (e.key === 'Enter') handleAddCategory(); if (e.key === 'Escape') { setIsAddingCategory(false); setNewCategoryInput(''); } }}
-                         className="form-input px-2 py-1 text-sm w-36"
-                         autoFocus
-                     />
-                     {newCategoryImagePreviewUrl && (
-                        <img src={newCategoryImagePreviewUrl} alt="Category preview" className="h-8 w-8 object-contain border rounded bg-white p-0.5" />
-                     )}
-                     <button onClick={handleAddCategory} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">Save</button>
-                     <button type="button" onClick={() => categoryImageInputRef.current?.click()} className="text-xs px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 ml-2">Image</button>
-                     <button onClick={() => { setIsAddingCategory(false); setNewCategoryInput(''); setNewCategoryImageFile(null); setNewCategoryImagePreviewUrl(undefined); }} className="text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300">Cancel</button>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteCategory(category.category_id, category.name);
+                        }}
+                        title={`Delete category "${category.name}"`}
+                        className="p-1 rounded-full text-red-400 hover:bg-red-100 hover:text-red-600 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </>
+                  )}
                 </div>
-           )}
+              </div>
+            ))}
+
+            {/* Add Category Button/Form */}
+            {!isAddingCategory ? (
+              <button
+                onClick={() => setIsAddingCategory(true)}
+                className="ml-2 text-emerald-600 hover:text-emerald-800 text-sm font-medium mb-2 p-2 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors"
+              >
+                + Add Category
+              </button>
+            ) : (
+              <div className="flex items-center space-x-2 mb-2 ml-2 p-2 border border-emerald-200 rounded-lg bg-emerald-50/50">
+                <input
+                  type="text"
+                  placeholder="New category name..."
+                  value={newCategoryInput}
+                  onChange={(e) => setNewCategoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddCategory();
+                    if (e.key === 'Escape') {
+                      setIsAddingCategory(false);
+                      setNewCategoryInput('');
+                    }
+                  }}
+                  className="form-input px-2 py-1 text-sm w-36"
+                  autoFocus
+                />
+                {newCategoryImagePreviewUrl && (
+                  <img
+                    src={newCategoryImagePreviewUrl}
+                    alt="Category preview"
+                    className="h-8 w-8 object-contain border rounded bg-white p-0.5"
+                  />
+                )}
+                <button
+                  onClick={handleAddCategory}
+                  className="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => categoryImageInputRef.current?.click()}
+                  className="text-xs px-2 py-1 rounded bg-blue-500 text-white hover:bg-blue-600"
+                >
+                  Image
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAddingCategory(false);
+                    setNewCategoryInput('');
+                    setNewCategoryImageFile(null);
+                    setNewCategoryImagePreviewUrl(undefined);
+                  }}
+                  className="text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Hidden File Input for Category Image */}
-        <input 
-          type="file" 
-          accept="image/*" 
-          ref={categoryImageInputRef} 
+        <input
+          type="file"
+          accept="image/*"
+          ref={categoryImageInputRef}
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) {
@@ -962,45 +1487,126 @@ const EditMenu: React.FC = () => {
               }
               setNewCategoryImagePreviewUrl(undefined);
             }
-            e.target.value = ''; // Reset file input value to allow re-selection of the same file
+            e.target.value = '';
           }}
           className="hidden"
         />
 
         {/* Product Grid */}
-        <p className="text-sm text-gray-600 mb-4">
-            {/* Display active category name based on ID, and use filteredProducts.length */}
-            {activeCategoryId !== null 
+        <p className="text-sm text-gray-600 mb-3">
+            {/* Display active filter type */}
+            {availabilityFilter !== 'all'
+              ? `${availabilityFilter.charAt(0).toUpperCase() + availabilityFilter.slice(1)} Products: ${filteredProducts.length} available`
+              : activeCategoryId !== null
                 ? `${productsLoading ? 'Loading...' : fetchedCategories.find(c => c.category_id === activeCategoryId)?.name || 'Selected Category'}: ${filteredProducts.length} products available` 
-                : categoriesLoading ? 'Loading Categories...' : (fetchedCategories.length > 0 ? 'Select a category' : 'No categories available')
+                : categoriesLoading ? 'Loading Categories...' : (fetchedCategories.length > 0 ? 'Select a category or filter' : 'No products or categories available')
             }
         </p>
         {productsLoading && <p className="text-gray-500">Loading products...</p>}
         {productsError && <p className="text-red-500">{productsError}</p>}
         {!productsLoading && !productsError && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-5 overflow-y-auto pr-2 flex-1">
-            {/* Filtering is now handled by filteredProducts definition */}
-            {filteredProducts.map(product => (
-            <div
-              key={product.id} 
-              onClick={() => handleSelectProduct(product)}
-              className={`bg-white rounded-2xl p-4 shadow border hover:shadow-md transition-shadow cursor-pointer ${selectedProduct?.id === product.id ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'}`}>
-                {/* Simplified Product Card for selection */}
-                <img src={product.image} alt={product.name} className="w-20 h-20 object-contain mx-auto mb-2" />
-                <h3 className="text-md font-semibold text-brown-900 mb-1 text-center">{product.name}</h3>
-                <p className="text-sm text-gray-700 text-center mb-2">${product.price.toFixed(2)}</p>
-                {/* Add edit/delete icons if needed directly on card */}
-            </div>
-          ))}
-           {filteredProducts.length === 0 && (
-             <p className="text-gray-500 col-span-full text-center mt-10">No products found in this category.</p>
-          )}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4 overflow-y-auto pr-2 flex-1"> 
+            {/* Filtering is now handled by filteredProducts definition - Removed sub-groupings */}
+            {filteredProducts.length > 0 ? (
+              <>
+                {filteredProducts.map(product => (
+                  <div
+                    key={product.id} // Changed key to be simpler since we are not duplicating by availability status here
+                    className={`bg-white rounded-xl p-4 shadow border hover:shadow-lg transition-all cursor-pointer relative flex flex-col justify-between min-h-[280px] ${selectedProduct?.id === product.id ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'} ${product.availability === 'unavailable' ? 'opacity-70' : ''}`}>
+                      <div onClick={() => handleSelectProduct(product)} className="cursor-pointer mb-2 text-center flex-grow flex flex-col items-center">
+                        {product.availability === 'unavailable' && (
+                            <span className="absolute top-2 right-2 bg-slate-400 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10">Unavailable</span>
+                        )}
+                        <img src={product.image} alt={product.name} className="w-32 h-32 object-contain mx-auto mb-3" />
+                        <h3 className="text-md font-semibold text-brown-900 mb-1">{product.name}</h3>
+                        <p className="text-sm text-gray-700 mb-2">${product.price.toFixed(2)}</p>
+                      </div>
+                      {/* Availability Toggle Button */}
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation(); // Prevent card click from firing
+                          const newAvailability = product.availability === 'unavailable' ? 'available' : 'unavailable';
+                          
+                          // Optimistically update local state for all products
+                          setProducts(prevProducts => 
+                              prevProducts.map(p => 
+                                  p.id === product.id ? { ...p, availability: newAvailability } : p
+                              )
+                          );
+                          // If this product is currently selected for full edit, update its form data too
+                          if (selectedProduct && selectedProduct.id === product.id) {
+                              setFormData(prevFormData => ({ 
+                                  ...prevFormData, 
+                                  availability: newAvailability
+                              }));
+                          }
+
+                          try {
+                            const token = localStorage.getItem('authToken');
+                            const response = await fetch(`http://localhost:3001/api/products/${product.id}/availability`, {
+                                method: 'PATCH',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(token && { 'Authorization': `Bearer ${token}` })
+                                },
+                                body: JSON.stringify({ availability: newAvailability })
+                            });
+                            if (!response.ok) {
+                                const errorData = await response.json().catch(() => ({ message: 'Failed to update availability status.'}));
+                                throw new Error(errorData.message);
+                            }
+                            const updatedProduct = await response.json();
+                            // Ensure the products array reflects the confirmed backend state
+                            setProducts(prevProducts => 
+                                prevProducts.map(p => 
+                                    p.id === updatedProduct.product_id ? { ...p, availability: updatedProduct.availability } : p
+                                )
+                            );
+                            if (selectedProduct && selectedProduct.id === updatedProduct.product_id) {
+                                setFormData(prevFormData => ({ 
+                                    ...prevFormData, 
+                                    availability: updatedProduct.availability
+                                }));
+                            }
+                            console.log(`Availability for ${product.name} updated to ${newAvailability}`);
+                          } catch (error: any) {
+                              console.error("Error updating availability from card:", error);
+                              alert(`Error: ${error.message}`);
+                              // Revert optimistic update on error
+                              setProducts(prevProducts => 
+                                  prevProducts.map(p => 
+                                      p.id === product.id ? { ...p, availability: product.availability } : p // Revert to original product.availability
+                                  )
+                              );
+                              if (selectedProduct && selectedProduct.id === product.id) {
+                                  const originalAvailability = product.availability || 'available';
+                                  setFormData(prevFormData => ({ 
+                                      ...prevFormData, 
+                                      availability: originalAvailability
+                                  }));
+                              }
+                          }
+                        }}
+                        className={`w-full mt-2 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                          product.availability === 'unavailable' 
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                            : 'bg-red-100 text-red-700 hover:bg-red-200'
+                        }`}
+                      >
+                        {product.availability === 'unavailable' ? 'Make Available' : 'Make Unavailable'}
+                      </button>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="text-gray-500 col-span-full text-center mt-10">No products found in this category.</p>
+            )}
         </div>
         )}
       </div>
 
       {/* Right Sidebar - Product Preview & Edit Form */}
-      <div className="w-96 bg-white rounded-2xl p-5 shadow flex flex-col border border-gray-100 h-full overflow-y-auto">
+      <div className="w-96 bg-white rounded-2xl p-5 shadow flex flex-col border border-gray-100 h-full overflow-y-auto styled-scrollbar"> {/* Ensure this outer div is the main scroll container */}
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-brown-800">{isAdding ? 'Add New Product' : selectedProduct ? 'Edit Product' : 'Product Details'}</h2>
              {selectedProduct && !isAdding && (
@@ -1052,7 +1658,16 @@ const EditMenu: React.FC = () => {
                              className="w-16 h-16 object-contain bg-white rounded-md p-1 border border-gray-200"/>
                           <div className="flex-1">
                              <p className="text-md font-semibold text-gray-800">{selectedProduct.name}</p>
-                             <p className="text-sm font-medium text-green-600 mb-2">${selectedProduct.price.toFixed(2)}</p>
+                             <div className="flex items-center mb-2">
+                               <p className="text-sm font-medium text-green-600 mr-2">${selectedProduct.price.toFixed(2)}</p>
+                               {/* Detailed Availability Badge in Preview */}
+                               {selectedProduct.availability === 'available' && (
+                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Available</span>
+                               )}
+                               {selectedProduct.availability === 'unavailable' && (
+                                  <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Unavailable</span>
+                               )}
+                             </div>
                               {/* Loop through selectedProduct.optionCategories */} 
                               {selectedProduct.optionCategories && selectedProduct.optionCategories.length > 0 ? (
                                 selectedProduct.optionCategories.map(cat => (
@@ -1068,513 +1683,448 @@ const EditMenu: React.FC = () => {
               </div>
           )}
 
-         {/* Edit/Add Form Section */}
-          {(selectedProduct || isAdding) && (
-              <form onSubmit={handleSave} className="flex flex-col">
-                 <h3 className="text-md font-semibold text-brown-800 mb-3">{isAdding ? 'Enter details' : 'Edit details'}</h3>
-                 <p className="text-xs text-gray-400 text-right mb-2">#012706</p> { /* Placeholder ID? */}
-                 
-                  <div className="space-y-4 overflow-y-auto pr-2 mb-4"> { /* Make form scrollable */}
-                     {/* Product Type - Now dynamic */}
-                     <div className="mb-3">
-                         <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                         <div className="flex flex-wrap gap-2">
-                            {categoriesLoading && <p className="text-xs text-gray-500">Loading...</p>}
-                            {categoriesError && <p className="text-xs text-red-500">Error loading categories</p>}
-                            {!categoriesLoading && !categoriesError && fetchedCategories.map(cat => (
-                                 <button 
-                                     key={cat.category_id}
-                                     type="button" // Prevent form submission
-                                     onClick={() => setFormData(prev => ({...prev, categoryId: cat.category_id}))} // Set categoryId
-                                     className={`px-3 py-1.5 rounded-lg text-xs border font-medium transition-colors ${ 
-                                        formData.categoryId === cat.category_id // Compare categoryId
-                                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                            : 'bg-stone-100 border-stone-200 text-stone-700 hover:bg-stone-200 hover:border-stone-300'
-                                     }`}
-                                 >
-                                     {/* Optional: Display cat.image_url here */}
-                                     {cat.name}
-                                 </button>
-                             ))}
-                            {!categoriesLoading && fetchedCategories.length === 0 && <p className="text-xs text-gray-500">No categories available. Add one first.</p>} 
-        </div>
-      </div>
-
-              <div>
-                        <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Enter product name</label>
-                        <input type="text" name="name" id="name" value={formData.name} onChange={handleInputChange} required className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm" />
-              </div>
-              <div>
-                        <label htmlFor="price" className="block text-sm font-medium text-gray-700 mb-1">Price</label>
-                        <input type="number" name="price" id="price" value={formData.price} onChange={handleInputChange} required step="0.01" className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm" />
+          {/* Wrapper for form and global option group management */}
+          <div> 
+            {/* Edit/Add Form Section */}
+            {(selectedProduct || isAdding) && (
+                <form onSubmit={handleSave} className="flex flex-col min-h-0">
+                    <h3 className="text-md font-semibold text-brown-800 mb-3">{isAdding ? 'Enter details' : 'Edit details'}</h3>
+                    
+                    {/* Scrollable content area for main form fields */}
+                    <div className="flex-1 space-y-4 overflow-y-auto pr-2 pb-4 styled-scrollbar">
+                        {/* Product Type - Now dynamic */}
+                        <div className="mb-2">
+                             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                             <div className="flex flex-wrap gap-2">
+                                {categoriesLoading && <p className="text-xs text-gray-500">Loading...</p>}
+                                {categoriesError && <p className="text-xs text-red-500">Error loading categories</p>}
+                                {!categoriesLoading && !categoriesError && fetchedCategories.map(cat => (
+                                     <button 
+                                         key={cat.category_id}
+                                         type="button" // Prevent form submission
+                                         onClick={() => setFormData(prev => ({...prev, categoryId: cat.category_id}))} // Set categoryId
+                                         className={`px-3 py-1.5 rounded-lg text-xs border font-medium transition-colors ${ 
+                                            formData.categoryId === cat.category_id // Compare categoryId
+                                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                                : 'bg-stone-100 border-stone-200 text-stone-700 hover:bg-stone-200 hover:border-stone-300'
+                                         }`}
+                                     >
+                                         {/* Optional: Display cat.image_url here */}
+                                         {cat.name}
+                                     </button>
+                                 ))}
+                                {!categoriesLoading && fetchedCategories.length === 0 && <p className="text-xs text-gray-500">No categories available. Add one first.</p>} 
                     </div>
+                  </div>
 
-                    {/* Image Upload Placeholder */}
-                    <div>
-                        <label htmlFor="image" className="block text-sm font-medium text-gray-700 mb-1">Product Image</label>
-                        <input type="file" name="image" id="image" accept="image/*" onChange={handleImageChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
-                         {/* Show image preview */} 
-                         {formData.imagePreviewUrl && (
-                            <img src={formData.imagePreviewUrl} alt="Preview" className="mt-2 h-20 w-20 object-contain border rounded bg-gray-50 p-1" />
-                         )}
-                    </div>
+                  <div>
+                            <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Enter product name</label>
+                            <input type="text" name="name" id="name" value={formData.name} onChange={handleInputChange} required className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm" />
+                  </div>
+                  <div>
+                            <label htmlFor="price" className="block text-sm font-medium text-gray-700 mb-1">Price</label>
+                            <input type="number" name="price" id="price" value={formData.price} onChange={handleInputChange} required step="0.01" className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm" />
+                        </div>
 
-                    {/* Assign Option Groups Section - REPLACES old Dynamic Options UI */}
-                    <div className="border-t border-gray-200 pt-4 mt-4">
-                        <h4 className="text-lg font-semibold text-brown-800 mb-3">Assign Option Groups to Product</h4>
-                        {optionGroupsLoading && <p className="text-xs text-gray-500">Loading option groups...</p>}
-                        {optionGroupsError && <p className="text-xs text-red-500">{optionGroupsError}</p>}
-                        {!optionGroupsLoading && !optionGroupsError && optionGroups.length === 0 && 
-                            <p className="text-xs text-gray-500">No option groups available. Please create some in the "Manage Option Groups" section first.</p>}
-                        
-                        {!optionGroupsLoading && !optionGroupsError && optionGroups.length > 0 && (
-                            <div className="space-y-2 max-h-48 overflow-y-auto border p-3 rounded-md bg-stone-50/70">
-                                {optionGroups.map(og => {
-                                    // Check if this option group (by its ID) is already in formData.optionCategories
-                                    const isSelected = formData.optionCategories.some(cat => cat.id === String(og.option_group_id));
-                                    return (
-                                        <label key={og.option_group_id} className="flex items-center space-x-2.5 p-2 hover:bg-stone-100 rounded-md text-sm cursor-pointer transition-colors">
-                                          <input 
-                                                type="checkbox"
-                                                className="form-checkbox h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500 focus:ring-offset-0"
-                                                checked={isSelected}
-                                                onChange={async e => {
-                                                    const { checked } = e.target;
-                                                    if (checked) {
-                                                        // Add this option group and its options to formData.optionCategories
-                                                        try {
-                                                            setOptionsLoading(true); // Indicate loading for this specific action
-                                                            const token = localStorage.getItem('authToken');
-                                                            const headers: HeadersInit = {};
-                                                            if (token) {
-                                                              headers['Authorization'] = `Bearer ${token}`;
+                              {/* Image Upload Placeholder */}
+                              <div>
+                                  <label htmlFor="image" className="block text-sm font-medium text-gray-700 mb-1">Product Image</label>
+                                  <input type="file" name="image" id="image" accept="image/*" onChange={handleImageChange} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+                                   {/* Show image preview */} 
+                                   {formData.imagePreviewUrl && (
+                                      <img src={formData.imagePreviewUrl} alt="Preview" className="mt-2 h-20 w-20 object-contain border rounded bg-gray-50 p-1" />
+                                   )}
+                              </div>
+
+                              {/* Description */}
+                              <div>
+                                  <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                                  <textarea 
+                                      name="description" 
+                                      id="description" 
+                                      value={formData.description} 
+                                      onChange={handleInputChange} 
+                                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm"
+                                      rows={4}
+                                  />
+                              </div>
+
+                              {/* Assign Option Groups Section */}
+                              <div className="mt-4">
+                                  <h4 className="text-sm font-medium text-gray-700 mb-1.5">Assign Option Groups</h4>
+                                  {optionGroupsLoading && <p className="text-xs text-gray-500">Loading groups...</p>}
+                                  {optionGroupsError && <p className="text-xs text-red-500">Error: {optionGroupsError}</p>}
+                                  {!optionGroupsLoading && !optionGroupsError && (
+                                      <div className="max-h-48 overflow-y-auto space-y-1.5 border p-2.5 rounded-md bg-gray-50/50 styled-scrollbar"> {/* Increased max-h slightly */}
+                                          {optionGroups.map(group => (
+                                              <label key={group.option_group_id} className="flex items-center space-x-2 text-xs text-gray-700 hover:bg-gray-100 p-1.5 rounded">
+                                                  <input 
+                                                    type="checkbox"
+                                                      className="form-checkbox h-3.5 w-3.5 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                                                      checked={formData.optionCategories.some(cat => cat.id === String(group.option_group_id))}
+                                                      onChange={(e) => {
+                                                          const isChecked = e.target.checked;
+                                                          setFormData(prevFormData => {
+                                                              let updatedCategories = [...prevFormData.optionCategories];
+                                                              if (isChecked) {
+                                                                  // Add if not present
+                                                                  if (!updatedCategories.some(cat => cat.id === String(group.option_group_id))) {
+                                                                      updatedCategories.push({
+                                                                          id: String(group.option_group_id),
+                                                                          name: group.name,
+                                                                          selectionType: group.selection_type,
+                                                                          is_required: group.is_required,
+                                                                          options: [] // Options are managed at the group level, not per-product assignment
+                                                                      });
                                                             }
-                                                            const response = await fetch(`http://localhost:3001/api/option-groups/${og.option_group_id}/options`, {
-                                                              headers: headers,
-                                                            });
-                                                            if (!response.ok) throw new Error('Failed to fetch options for group ' + og.name);
-                                                            const fetchedOptions: ProductOption[] = await response.json();
-                                                            const newCategoryToAdd: OptionCategory = {
-                                                                id: String(og.option_group_id),
-                                                                name: og.name,
-                                                                selectionType: og.selection_type,
-                                                                is_required: og.is_required,
-                                                                options: fetchedOptions.map(opt => ({...opt, id: String(opt.id)}))
-                                                            };
-                                                            setFormData(prev => ({ ...prev, optionCategories: [...prev.optionCategories, newCategoryToAdd] }));
-                                                        } catch (err:any) {
-                                                            console.error("Error adding option group to product:", err);
-                                                            alert(err.message || "Could not load options for this group. Try again.");
-                                                        } finally {
-                                                            setOptionsLoading(false); // Reset loading state
-                                                        }
-                                                    } else {
-                                                        // Remove this option group from formData.optionCategories
-                                                        setFormData(prev => ({ 
-                                                            ...prev, 
-                                                            optionCategories: prev.optionCategories.filter(cat => cat.id !== String(og.option_group_id))
-                                                        }));
-                                                    }
-                                                }}
+                                                        } else {
+                                                                  // Remove if present
+                                                                  updatedCategories = updatedCategories.filter(cat => cat.id !== String(group.option_group_id));
+                                                              }
+                                                              return { ...prevFormData, optionCategories: updatedCategories };
+                                                          });
+                                                      }}
+                                                  />
+                                                  <span>{group.name} ({group.selection_type}{group.is_required ? ', required' : ''})</span>
+                                            </label>
+                                          ))}
+                                          {optionGroups.length === 0 && <p className="text-xs text-gray-400 italic py-2 text-center">No option groups created yet.</p>}
+                                  </div>
+                              )}
+                          </div>
+                              </div> {/* This closes the scrollable form content div */}
+
+                              {/* Action Buttons for the main product form */}
+                              <div className="pt-4 border-t border-gray-200 flex justify-end space-x-3">
+                         <button type="button" onClick={handleCancel} className="form-cancel-button">
+                             Cancel
+                         </button>
+                         <button type="submit" className="form-save-button">
+                             {isAdding ? 'Add Product' : 'Save Changes'}
+                         </button>
+                       </div>
+                   </form>
+               )} {/* This closes the selectedProduct || isAdding conditional rendering */}
+
+               {/* Option Groups Management UI (OUTSIDE the main product form) */}
+               <div className="my-6 pt-6 border-t border-gray-200">
+                 <h3 className="text-xl font-semibold text-gray-800 mb-4">Manage Option Groups</h3>
+                 
+                 {/* Button to toggle Add Option Group form */}
+                 {!isAddingOptionGroup && (
+                    <button
+                        onClick={() => {
+                            setIsAddingOptionGroup(true);
+                            // Reset new group form fields
+                            setNewOptionGroupName('');
+                            setNewOptionGroupSelectionType('radio');
+                            setNewOptionGroupIsRequired(false);
+                        }}
+                        className="mb-4 bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                    >
+                        + Add New Option Group
+                    </button>
+                 )}
+
+                 {/* Add New Option Group Form */}
+                 {isAddingOptionGroup && (
+                    <div className="mb-6 p-4 border border-blue-200 rounded-lg bg-blue-50/50">
+                        <h4 className="text-md font-semibold text-blue-700 mb-2">New Option Group</h4>
+                        <div className="space-y-3">
+                            <div>
+                                <label htmlFor="newOptionGroupName" className="block text-xs font-medium text-gray-700 mb-0.5">Group Name</label>
+                                <input 
+                                    type="text" 
+                                    id="newOptionGroupName"
+                                    value={newOptionGroupName}
+                                    onChange={(e) => setNewOptionGroupName(e.target.value)}
+                                    className="form-input w-full text-sm"
+                                    placeholder="e.g., Size, Milk Type"
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="newOptionGroupSelectionType" className="block text-xs font-medium text-gray-700 mb-0.5">Selection Type</label>
+                                <select 
+                                    id="newOptionGroupSelectionType"
+                                    value={newOptionGroupSelectionType}
+                                    onChange={(e) => setNewOptionGroupSelectionType(e.target.value as 'radio' | 'checkbox')}
+                                    className="form-select w-full text-sm"
+                                >
+                                    <option value="radio">Radio (Select One)</option>
+                                    <option value="checkbox">Checkbox (Select Multiple)</option>
+                                </select>
+                            </div>
+                            <div className="flex items-center">
+                                <input 
+                                    type="checkbox" 
+                                    id="newOptionGroupIsRequired"
+                                    checked={newOptionGroupIsRequired}
+                                    onChange={(e) => setNewOptionGroupIsRequired(e.target.checked)}
+                                    className="form-checkbox h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                                />
+                                <label htmlFor="newOptionGroupIsRequired" className="ml-2 text-xs font-medium text-gray-700">Is this group required?</label>
+                            </div>
+                        </div>
+                        <div className="mt-3 flex space-x-2">
+                            <button 
+                                onClick={handleAddOptionGroup} // Use the new function here
+                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600"
+                                disabled={!newOptionGroupName.trim()}
+                            >
+                                Save Group
+                            </button>
+                            <button onClick={() => setIsAddingOptionGroup(false)} className="px-3 py-1 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300">Cancel</button>
+                        </div>
+                    </div>
+                 )}
+
+                 {/* List of Existing Option Groups */}
+                 {optionGroupsLoading && <p className="text-sm text-gray-500">Loading option groups...</p>}
+                 {optionGroupsError && <p className="text-sm text-red-500">Error: {optionGroupsError}</p>}
+                 {!optionGroupsLoading && !optionGroupsError && (
+                    <div className="space-y-3">
+                        {optionGroups.length === 0 && !isAddingOptionGroup && (
+                            <p className="text-sm text-gray-500 italic">No option groups created yet.</p>
+                        )}
+                        {optionGroups.map(group => (
+                            <div key={group.option_group_id} className="p-3 border rounded-lg bg-stone-50/70 hover:shadow-sm transition-shadow">
+                                {editingGroupId === group.option_group_id ? (
+                                    // Inline Edit Form
+                                    <div className="space-y-2">
+                                        <div>
+                                            <label htmlFor={`editOptionGroupName-${group.option_group_id}`} className="text-xs font-medium text-gray-600">Name</label>
+                                            <input 
+                                                type="text" 
+                                                id={`editOptionGroupName-${group.option_group_id}`}
+                                                value={editOptionGroupName} 
+                                                onChange={(e) => setEditOptionGroupName(e.target.value)} 
+                                                className="form-input w-full text-sm mt-0.5" 
                                             />
-                                            <span>{og.name} <span className="text-xs text-gray-400">({og.selection_type})</span></span>
-                                        </label>
-                                    );
-                                })}
+                                        </div>
+                                        <div>
+                                            <label htmlFor={`editOptionGroupSelectionType-${group.option_group_id}`} className="text-xs font-medium text-gray-600">Type</label>
+                                            <select 
+                                                id={`editOptionGroupSelectionType-${group.option_group_id}`}
+                                                value={editOptionGroupSelectionType} 
+                                                onChange={(e) => setEditOptionGroupSelectionType(e.target.value as 'radio' | 'checkbox')} 
+                                                className="form-select w-full text-sm mt-0.5"
+                                            >
+                                                <option value="radio">Radio</option>
+                                                <option value="checkbox">Checkbox</option>
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center pt-1">
+                                            <input 
+                                                type="checkbox" 
+                                                id={`editOptionGroupIsRequired-${group.option_group_id}`}
+                                                checked={editOptionGroupIsRequired}
+                                                onChange={(e) => setEditOptionGroupIsRequired(e.target.checked)}
+                                                className="form-checkbox h-3.5 w-3.5 text-blue-600 rounded border-gray-300"
+                                            />
+                                            <label htmlFor={`editOptionGroupIsRequired-${group.option_group_id}`} className="ml-1.5 text-xs text-gray-700">Required</label>
+                                        </div>
+                                        <div className="flex space-x-2 mt-2">
+                                            <button onClick={() => handleUpdateOptionGroup(group.option_group_id)} className="px-2.5 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600">Save</button>
+                                            <button onClick={() => setEditingGroupId(null)} className="px-2.5 py-1 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300">Cancel</button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    // Display Mode
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <h4 className="font-medium text-gray-800">{group.name}</h4>
+                                            <p className="text-xs text-gray-600">
+                                                Type: {group.selection_type} &bull; Required: {group.is_required ? 'Yes' : 'No'}
+                                            </p>
+                                        </div>
+                                        <div className="flex space-x-1.5 flex-shrink-0">
+                                            <button 
+                                                onClick={() => {
+                                                    setEditingGroupId(group.option_group_id);
+                                                    setEditOptionGroupName(group.name);
+                                                    setEditOptionGroupSelectionType(group.selection_type);
+                                                    setEditOptionGroupIsRequired(group.is_required);
+                                                }} 
+                                                className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200"
+                                            >
+                                                Edit Group
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteOptionGroup(group.option_group_id)} // Use the new function here
+                                                className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                                            >
+                                                Delete Group
+                                            </button>
+                                            <button 
+                                                onClick={() => setSelectedOptionGroupForOptions(group)}
+                                                className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
+                                            >
+                                                Manage Options ({optionsForSelectedGroup.length > 0 && selectedOptionGroupForOptions?.option_group_id === group.option_group_id ? optionsForSelectedGroup.length : '...'})
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                 )}
+
+                {/* UI for Managing Options of a Selected Group */}
+                {selectedOptionGroupForOptions && (
+                    <div className="mt-6 pt-4 border-t border-dashed border-gray-300">
+                        <h4 className="text-lg font-semibold text-gray-700 mb-3">
+                            Options for: <span className="text-purple-600">{selectedOptionGroupForOptions.name}</span>
+                        </h4>
+                        {optionsLoading && <p className="text-sm text-gray-500">Loading options...</p>}
+                        {optionsError && <p className="text-sm text-red-500">Error: {optionsError}</p>}
+                        {!optionsLoading && !optionsError && (
+                            <div>
+                                {optionsForSelectedGroup.length === 0 && !isAddingOption && (
+                                    <p className="text-sm text-gray-500 italic mb-2">No options defined for this group yet.</p>
+                                )}
+                                <div className="space-y-2 mb-3">
+                                    {optionsForSelectedGroup.map(opt => (
+                                        <div key={opt.id || opt.label} className="flex justify-between items-center p-2 bg-white border rounded-md text-sm">
+                                            <span>{opt.label} {opt.priceModifier ? `(+$${opt.priceModifier.toFixed(2)})` : ''}</span>
+                                            <div className="space-x-1.5">
+                                                <button 
+                                                    onClick={() => { setEditingOption(opt); setIsAddingOption(true); setOptionFormLabel(opt.label); setOptionFormValue(opt.value || ''); setOptionFormPriceModifier(String(opt.priceModifier || '')); }} 
+                                                    className="text-xs px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleDeleteOptionFromGroup(opt.id)}
+                                                    className="text-xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                {/* Add/Edit Option Form */}
+                                {!isAddingOption && (
+                                    <button 
+                                        onClick={() => { setIsAddingOption(true); setEditingOption(null); setOptionFormLabel(''); setOptionFormValue(''); setOptionFormPriceModifier(''); }} 
+                                        className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600"
+                                    >
+                                        + Add Option
+                                    </button>
+                                )}
+                                {isAddingOption && (
+                                    <div className="p-3 border rounded-lg bg-green-50/50 mt-2 space-y-2">
+                                        <h5 className="text-sm font-medium text-green-700">{editingOption ? 'Edit Option' : 'New Option'}</h5>
+                                        <div>
+                                            <label className="text-xs text-gray-600">Label</label>
+                                            <input type="text" value={optionFormLabel} onChange={(e) => setOptionFormLabel(e.target.value)} className="form-input w-full text-sm mt-0.5" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-600">Value (optional, for internal use or if different from label)</label>
+                                            <input type="text" value={optionFormValue} onChange={(e) => setOptionFormValue(e.target.value)} className="form-input w-full text-sm mt-0.5" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-600">Price Modifier (e.g., 0.50 or -0.25)</label>
+                                            <input type="number" step="0.01" value={optionFormPriceModifier} onChange={(e) => setOptionFormPriceModifier(e.target.value)} className="form-input w-full text-sm mt-0.5" />
+                                        </div>
+                                        <div className="flex space-x-2">
+                                            <button 
+                                                onClick={editingOption ? handleUpdateOptionInGroup : handleAddOptionToGroup} 
+                                                className="text-xs px-2 py-1 bg-green-600 text-white rounded"
+                                                disabled={!optionFormLabel.trim()}
+                                            >
+                                                {editingOption ? 'Save Changes' : 'Add Option'}
+                                            </button>
+                                            <button onClick={() => { setIsAddingOption(false); setEditingOption(null); setOptionFormLabel(''); setOptionFormValue(''); setOptionFormPriceModifier(''); }} className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded">Cancel</button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
-                        {/* The old UI for adding/editing option categories & options directly within the product form is now removed. 
-                           Users should manage Option Groups and their Options in the dedicated section, 
-                           then assign those pre-defined groups to products here. */}
+                        <button 
+                            onClick={() => setSelectedOptionGroupForOptions(null)} 
+                            className="mt-4 text-xs px-2.5 py-1 bg-purple-500 text-white rounded hover:bg-purple-600"
+                        >
+                            Done Managing Options
+                        </button>
                     </div>
-                                  </div>
-
-                 {/* Form Actions */}
-                 <div className="flex space-x-3 mt-auto pt-4 border-t border-gray-100">
-                   <button type="button" onClick={handleCancel} className="form-cancel-button">
-                       Cancel
-                   </button>
-                   <button type="submit" className="form-save-button">
-                       {isAdding ? 'Add Product' : 'Save Changes'}
-                   </button>
-                 </div>
-             </form>
-          )}
-
-          {/* Placeholder when nothing is selected and not adding */}
-           {!selectedProduct && !isAdding && (
-               <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
-                 <img src="/src/assets/edit-menu.svg" alt="" className="w-16 h-16 mb-4 opacity-50" />
-                 <p>Select a product from the left to preview or edit its details.</p>
-                 <p className="mt-2">Or click 'Add a product' to create a new one.</p>
-        </div>
-      )}
-
-      {/* Option Groups Management Section (New) */}
-      <div className="my-8 pt-6 border-t border-gray-200 flex-shrink-0">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-semibold text-brown-900">Manage Option Groups</h2>
-          {!isAddingOptionGroup && (
-                                              <button 
-              onClick={() => setIsAddingOptionGroup(true)}
-              className="bg-purple-600 text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-purple-700 transition-colors"
-            >
-              <img src="/src/assets/add.svg" alt="" className="w-4 h-4" />
-              Add Option Group
-                                              </button>
-          )}
-                                          </div>
-
-        {isAddingOptionGroup && (
-          <div className="bg-purple-50 p-4 rounded-lg border border-purple-200 mb-4">
-            <h3 className="text-lg font-medium text-purple-800 mb-3">Create New Option Group</h3>
-            {/* Use flex-wrap instead of grid for better responsiveness */}
-            <div className="flex flex-wrap gap-4 items-end">
-              <div className="flex-grow min-w-[150px]">
-                <label htmlFor="newOptionGroupName" className="block text-xs font-medium text-gray-700 mb-1">Group Name</label>
-                <input
-                  type="text"
-                  id="newOptionGroupName"
-                  value={newOptionGroupName}
-                  onChange={(e) => setNewOptionGroupName(e.target.value)}
-                  className="form-input"
-                  placeholder="e.g., Size, Milk Type"
-                />
-              </div>
-              <div>
-                <label htmlFor="newOptionGroupSelectionType" className="block text-xs font-medium text-gray-700 mb-1">Selection Type</label>
-                <select 
-                  id="newOptionGroupSelectionType"
-                  value={newOptionGroupSelectionType}
-                  onChange={(e) => setNewOptionGroupSelectionType(e.target.value as 'radio' | 'checkbox')}
-                  className="form-select"
-                >
-                  <option value="radio">Radio (Select One)</option>
-                  <option value="checkbox">Checkbox (Select Many)</option>
-                </select>
-              </div>
-              {/* Added Is Required Checkbox for New Option Group */}
-              <div className="flex items-center pt-5">
-                <input 
-                  type="checkbox" 
-                  id="newOptionGroupIsRequired"
-                  checked={newOptionGroupIsRequired}
-                  onChange={(e) => setNewOptionGroupIsRequired(e.target.checked)}
-                  className="form-checkbox h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
-                />
-                <label htmlFor="newOptionGroupIsRequired" className="ml-2 text-xs font-medium text-gray-700">Is this group required?</label>
-              </div>
-
-              <div className="flex space-x-2 flex-shrink-0">
-                <button 
-                  onClick={async () => {
-                    if (!newOptionGroupName.trim()) {
-                      alert("Option group name cannot be empty.");
-                      return;
-                    }
-                    try {
-                      const token = localStorage.getItem('authToken');
-                      const headers: HeadersInit = { 'Content-Type': 'application/json' };
-                      if (token) {
-                        headers['Authorization'] = `Bearer ${token}`;
-                      }
-                      const response = await fetch('http://localhost:3001/api/option-groups', {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify({ 
-                          name: newOptionGroupName, 
-                          selection_type: newOptionGroupSelectionType, 
-                          is_required: newOptionGroupIsRequired
-                        }),
-                      });
-                      if (!response.ok) {
-                        let errorMsg = `HTTP error! ${response.status}`;
-                        try { 
-                            const errData = await response.json(); 
-                            errorMsg = errData.message || errorMsg; 
-                        } catch(e){ /* Ignore parse error if body not json */ }
-                        throw new Error(errorMsg);
-                      }
-                      const createdGroup: BackendOptionGroup = await response.json();
-                      setOptionGroups(prev => [...prev, createdGroup]);
-                      setNewOptionGroupName('');
-                      setNewOptionGroupSelectionType('radio');
-                      setNewOptionGroupIsRequired(false);
-                      setIsAddingOptionGroup(false);
-                      alert('Option Group created successfully!');
-                    } catch (err:any) {
-                      console.error("Failed to create option group:", err);
-                      alert(`Error: ${err.message}`);
-                    }
-                  }}
-                  className="form-save-button py-1.5 bg-purple-500 hover:bg-purple-600 flex-1"
-                >
-                  Save Group
-                </button>
-                <button 
-                  onClick={() => {
-                    setIsAddingOptionGroup(false);
-                    setNewOptionGroupName('');
-                    setNewOptionGroupSelectionType('radio');
-                    setNewOptionGroupIsRequired(false);
-                  }}
-                  className="form-cancel-button py-1.5 flex-1"
-                >
-                  Cancel
-                </button>
-                               </div>
-              </div>
-          </div>
-        )}
-
-        {optionGroupsLoading && <p className="text-gray-500">Loading option groups...</p>}
-        {optionGroupsError && <p className="text-red-500">{optionGroupsError}</p>}
-        {!optionGroupsLoading && !optionGroupsError && (
-          <div className="space-y-3">
-            {optionGroups.length === 0 && !isAddingOptionGroup && (
-              <p className="text-gray-500 text-center py-4">No option groups found. Click "Add Option Group" to create one.</p>
-            )}
-            {optionGroups.map(group => (
-              <div key={group.option_group_id} className="p-3 border border-gray-200 rounded-lg bg-white shadow-sm flex justify-between items-center">
-                {editingGroupId === group.option_group_id ? (
-                  // --- Inline Edit Form ---
-                  <div className="flex-1 flex flex-wrap gap-2 items-center mr-4">
-                    <input 
-                      type="text" 
-                      value={editOptionGroupName}
-                      onChange={(e) => setEditOptionGroupName(e.target.value)}
-                      className="form-input text-sm py-1 px-2 flex-grow min-w-[120px]"
-                    />
-                    <select 
-                      value={editOptionGroupSelectionType} 
-                      onChange={(e) => setEditOptionGroupSelectionType(e.target.value as 'radio' | 'checkbox')}
-                      className="form-select text-sm py-1 px-2"
-                    >
-                      <option value="radio">Radio</option>
-                      <option value="checkbox">Checkbox</option>
-                    </select>
-                    {/* Added Is Required Checkbox for Editing Option Group */}
-                    <div className="flex items-center">
-                      <input 
-                        type="checkbox" 
-                        id={`editOptionGroupIsRequired-${group.option_group_id}`}
-                        checked={editOptionGroupIsRequired}
-                        onChange={(e) => setEditOptionGroupIsRequired(e.target.checked)}
-                        className="form-checkbox h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
-                      />
-                      <label htmlFor={`editOptionGroupIsRequired-${group.option_group_id}`} className="ml-1.5 text-xs font-medium text-gray-700">Required</label>
-                    </div>
-                    <button onClick={() => handleUpdateOptionGroup(group.option_group_id)} className="text-xs px-2 py-1 rounded bg-green-100 text-green-700 hover:bg-green-200">Save</button>
-                    <button onClick={() => setEditingGroupId(null)} className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200">Cancel</button>
-                  </div>
-                ) : (
-                  // --- Display View ---
-                  <div className="flex-1 mr-4">
-                    <p className="font-medium text-gray-800">
-                      {group.name}
-                      {group.is_required && <span className="text-xs text-red-500 font-semibold ml-1.5">(Required)</span>}
-                    </p>
-                    <p className="text-xs text-gray-500">Type: {group.selection_type} (ID: {group.option_group_id})</p>
-                  </div>
                 )}
-                
-                {editingGroupId !== group.option_group_id && (
-                  <div className="flex space-x-2 flex-shrink-0">
-                    <button 
-                      onClick={() => {
-                        setEditingGroupId(group.option_group_id);
-                        setEditOptionGroupName(group.name);
-                        setEditOptionGroupSelectionType(group.selection_type);
-                        setEditOptionGroupIsRequired(group.is_required);
-                      }}
-                      className="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
-                    >
-                      Edit Group
-                    </button>
-                    <button 
-                      onClick={() => setSelectedOptionGroupForOptions(group)} 
-                      className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200"
-                    >
-                      Options
-                    </button>
-                    <button 
-                      onClick={async () => {
-                        if (window.confirm(`Are you sure you want to delete the option group "${group.name}"? This action cannot be undone.`)) {
-                          try {
-                            const token = localStorage.getItem('authToken'); // Get token
-                            const headers: HeadersInit = {};
-                            if (token) {
-                              headers['Authorization'] = `Bearer ${token}`;
+
+              {/* Modal for Editing Category */}
+              {editingCategory && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                  <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+                    <h3 className="text-lg font-semibold text-gray-800 mb-4">Edit Category: {editingCategory.name}</h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label htmlFor="editCategoryNameInput" className="block text-sm font-medium text-gray-700 mb-1">Category Name</label>
+                        <input
+                          type="text"
+                          id="editCategoryNameInput"
+                          value={editCategoryNameInput}
+                          onChange={(e) => setEditCategoryNameInput(e.target.value)}
+                          className="form-input w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Category Image</label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          ref={editCategoryImageInputRef}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setEditCategoryImageFile(file);
+                              if (editCategoryImagePreviewUrl && editCategoryImagePreviewUrl.startsWith('blob:')) {
+                                URL.revokeObjectURL(editCategoryImagePreviewUrl);
+                              }
+                              setEditCategoryImagePreviewUrl(URL.createObjectURL(file));
                             } else {
-                              console.warn('[EditMenu.tsx] Auth token not found for deleting option group.');
+                              // Optionally allow clearing the image
+                              // setEditCategoryImageFile(null);
+                              // setEditCategoryImagePreviewUrl(undefined); 
                             }
-                            const response = await fetch(`http://localhost:3001/api/option-groups/${group.option_group_id}`, {
-                              method: 'DELETE',
-                              headers: headers, // Add headers
-                            });
-                            if (!response.ok) {
-                              const errData = await response.json();
-                              throw new Error(errData.message || `HTTP error! ${response.status}`);
-                            }
-                            setOptionGroups(prev => prev.filter(og => og.option_group_id !== group.option_group_id));
-                            alert('Option Group deleted successfully!');
-                          } catch (err: any) {
-                            console.error("Failed to delete option group:", err);
-                            alert(`Error: ${err.message}`);
-                          }
-                        }
-                      }}
-                      className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-                 </div>
-
-      {/* Section to Display and Manage Options for Selected Group */}
-      {selectedOptionGroupForOptions && (
-        <div className="my-8 pt-6 border-t border-gray-200 flex-shrink-0">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-semibold text-brown-800">
-              Options for "{selectedOptionGroupForOptions.name}"
-            </h3>
-            <button onClick={() => {
-              setIsAddingOption(true);
-              setEditingOption(null); // Clear any editing option state
-              setOptionFormLabel(''); 
-              setOptionFormPriceModifier('');
-            }} className="quick-action-button">
-              + Add New Option
-                   </button>
-          </div>
-
-          {optionsLoading && <p className="text-gray-500">Loading options...</p>}
-          {optionsError && <p className="text-red-500">{optionsError}</p>}
-          
-          {!optionsLoading && !optionsError && (
-            optionsForSelectedGroup.length === 0 && !isAddingOption ? (
-              <p className="text-gray-500 text-center py-3">No options defined for this group yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {optionsForSelectedGroup.map(opt => (
-                  <div key={opt.id} className="p-2.5 border border-gray-100 rounded-md bg-white flex justify-between items-center text-sm">
-                    <span>{opt.label} {opt.priceModifier ? `(+$${parseFloat(String(opt.priceModifier)).toFixed(2)})` : ''}</span>
-                    <div className="flex space-x-1.5">
-                      <button 
-                        onClick={() => {
-                          setEditingOption(opt);
-                          setIsAddingOption(false); // Not adding, but editing
-                          setOptionFormLabel(opt.label);
-                          setOptionFormPriceModifier(opt.priceModifier !== undefined ? String(opt.priceModifier) : '');
-                        }}
-                        className="text-xs p-1 rounded text-yellow-600 hover:bg-yellow-100"
-                      >
-                        Edit
-                      </button>
-                      <button 
-                         onClick={async () => {
-                          if (window.confirm(`Are you sure you want to delete option "${opt.label}"?`)) {
-                            try {
-                              const token = localStorage.getItem('authToken'); // Get token
-                              const headers: HeadersInit = {};
-                              if (token) {
-                                headers['Authorization'] = `Bearer ${token}`;
-                              } else {
-                                console.warn('[EditMenu.tsx] Auth token not found for deleting option.');
-                              }
-                              const response = await fetch(`http://localhost:3001/api/options/${opt.id}`, {
-                                method: 'DELETE',
-                                headers: headers, // Add headers
-                              });
-                              if (!response.ok) { 
-                                const errData = await response.json(); 
-                                throw new Error(errData.message || `HTTP error ${response.status}`); 
-                              }
-                              setOptionsForSelectedGroup(prev => prev.filter(o => o.id !== opt.id));
-                              alert('Option deleted.');
-                            } catch (err:any) { alert(`Error: ${err.message}`); }
-                          }
-                        }}
-                        className="text-xs p-1 rounded text-red-500 hover:bg-red-100"
-                      >
-                        Delete
-                   </button>
-                 </div>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-
-          {(isAddingOption || editingOption) && (
-            <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-              <h4 className="text-md font-medium text-gray-700 mb-2">{isAddingOption ? 'Add New Option' : 'Edit Option'}</h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                  <div>
-                      <label className="block text-xs text-gray-600 mb-0.5">Option Label</label>
-                      <input type="text" value={optionFormLabel} onChange={e => setOptionFormLabel(e.target.value)} className="form-input text-sm" placeholder="e.g., Small, Almond Milk" />
-                  </div>
-                  <div>
-                      <label className="block text-xs text-gray-600 mb-0.5">Price Modifier (e.g., 0.50 or -0.25)</label>
-                      <input type="number" step="0.01" value={optionFormPriceModifier} onChange={e => setOptionFormPriceModifier(e.target.value)} className="form-input text-sm" placeholder="0.00"/>
-                  </div>
-                  <div className="flex space-x-2">
-                      <button 
-                          onClick={async () => {
-                              if (!optionFormLabel.trim()) { alert("Option label is required."); return; }
-                              const payload = {
-                                  option_group_id: selectedOptionGroupForOptions!.option_group_id,
-                                  label: optionFormLabel.trim(),
-                                  price_modifier: parseFloat(optionFormPriceModifier) || 0.00
-                              };
-                              const url = editingOption ? `http://localhost:3001/api/options/${editingOption.id}` : 'http://localhost:3001/api/options';
-                              const method = editingOption ? 'PUT' : 'POST';
-                              try {
-                                  const token = localStorage.getItem('authToken'); // Get token
-                                  const headers: HeadersInit = {'Content-Type':'application/json'};
-                                  if (token) {
-                                    headers['Authorization'] = `Bearer ${token}`;
-                                  } else {
-                                    console.warn('[EditMenu.tsx] Auth token not found for saving option.');
-                                  }
-                                  const response = await fetch(url, {
-                                    method,
-                                    headers: headers, // Use updated headers object
-                                    body: JSON.stringify(payload)
-                                  });
-                                  if(!response.ok){ const err = await response.json(); throw new Error(err.message || `HTTP Error ${response.status}`);}
-                                  const savedOption: ProductOption = await response.json();
-                                  const finalSavedOption = {...savedOption, id: String(savedOption.id)}; // Ensure ID is string
-
-                                  if(editingOption){
-                                      setOptionsForSelectedGroup(prev => prev.map(o => o.id === finalSavedOption.id ? finalSavedOption : o));
-                                  } else {
-                                      setOptionsForSelectedGroup(prev => [...prev, finalSavedOption]);
-                                  }
-                                  setIsAddingOption(false); setEditingOption(null); setOptionFormLabel(''); setOptionFormPriceModifier('');
-                                  alert(`Option ${editingOption ? 'updated' : 'added'}!`);
-                              } catch (err:any) { alert(`Error: ${err.message}`); }
+                            e.target.value = ''; 
                           }}
-                          className="form-save-button py-1.5 flex-1 text-sm"
-                      >
-                         {editingOption ? 'Save Changes' : 'Add Option'}
+                          className="form-input-file"
+                        />
+                        {editCategoryImagePreviewUrl && (
+                          <div className="mt-2">
+                            <img src={editCategoryImagePreviewUrl} alt="Category preview" className="h-20 w-20 object-contain border rounded bg-gray-50 p-1" />
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                setEditCategoryImageFile(null);
+                                if (editCategoryImagePreviewUrl?.startsWith('blob:')) URL.revokeObjectURL(editCategoryImagePreviewUrl);
+                                setEditCategoryImagePreviewUrl(undefined);
+                              }} 
+                              className="text-xs text-red-500 hover:text-red-700 mt-1"
+                            >
+                              Remove Image
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-6 flex justify-end space-x-3">
+                      <button type="button" onClick={() => { setEditingCategory(null); setEditCategoryImageFile(null); setEditCategoryImagePreviewUrl(undefined);}} className="form-cancel-button">
+                        Cancel
                       </button>
-                       <button onClick={() => { setIsAddingOption(false); setEditingOption(null);}} className="form-cancel-button py-1.5 flex-1 text-sm">Cancel</button>
+                      <button type="button" onClick={handleUpdateCategory} className="form-save-button">
+                        Save Changes
+                      </button>
+                    </div>
                   </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      </div>
-    </div>
+                    </div>
+                )}
+               </div>
+             </div> {/* Closes the new wrapper div */}
+        </div> {/* This closes the w-96 sidebar */}
+    </div> /* This closes the main flex container */
   );
 };
 
 export default EditMenu; 
+

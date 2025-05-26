@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User, EmployeeData, Product } from '../types'; // Renamed to avoid conflict
 
 // Remove mock data as we will fetch from API
@@ -14,7 +14,7 @@ interface DisplayEmployee extends EmployeeData {
 interface EmployeeFormDetails {
   employeeId: string;
   position: EmployeeData['position']; // Use the position type from EmployeeData
-  phone?: string;
+  phone_number?: string;
   status: EmployeeData['status']; // Use the status type from EmployeeData
   hireDate?: string;
   role?: User['role']; // Ensure this is here
@@ -24,6 +24,7 @@ interface EmployeeFormDetails {
 const Employee: React.FC = () => {
   const [employees, setEmployees] = useState<DisplayEmployee[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<DisplayEmployee | null>(null);
+  const [employeeSearchTerm, setEmployeeSearchTerm] = useState<string>(''); // New state for employee search
 
   const [isAddEmployeeModalOpen, setIsAddEmployeeModalOpen] = useState<boolean>(false);
   const [userSearchTerm, setUserSearchTerm] = useState<string>('');
@@ -33,7 +34,7 @@ const Employee: React.FC = () => {
   const [employeeDetails, setEmployeeDetails] = useState<EmployeeFormDetails>({
     employeeId: '',
     position: 'Other', // Default position from EmployeeData['position']
-    phone: '',
+    phone_number: '',
     status: 'Active', 
     hireDate: '',
     role: 'employee', // Default role
@@ -95,12 +96,16 @@ const Employee: React.FC = () => {
           email: emp.email,
           position: emp.position,
           status: emp.status,
-          phone: emp.phone_number || undefined,
           hireDate: emp.hire_date ? new Date(emp.hire_date).toISOString().split('T')[0] : undefined,
           user: {
-            id: emp.email,
-            name: emp.employeeName,
-            role: emp.user_role,
+            internalId: emp.user_id?.toString() || '',
+            email: emp.email || '',
+            name: emp.employeeName || '',
+            role: emp.user_role || 'customer',
+            avatar: emp.avatar_url || undefined,
+            referralCode: emp.referral_code || undefined,
+            phone_number: emp.phone_number || undefined,
+            address: emp.address || undefined,
           }
         }));
         setEmployees(mappedEmployees);
@@ -143,7 +148,8 @@ const Employee: React.FC = () => {
       const mappedUsers: User[] = data
         .filter(u => !currentEmployeeEmails.has(u.email)) // Filter out users already in the employees list
         .map(u => ({
-          id: u.email, 
+          internalId: u.user_id?.toString() || '',
+          email: u.email,
           name: u.name,
           role: u.role,
         }));
@@ -162,13 +168,27 @@ const Employee: React.FC = () => {
     fetchAvailableUsers();
   }, [fetchAvailableUsers]); // This will trigger when isAddEmployeeModalOpen changes due to fetchAvailableUsers deps
 
+  // --- Client-side filtering for employee list ---
+  const filteredEmployees = useMemo(() => {
+    if (!employeeSearchTerm.trim()) {
+      return employees;
+    }
+    const lowercasedSearchTerm = employeeSearchTerm.toLowerCase();
+    return employees.filter(emp =>
+      emp.employeeName.toLowerCase().includes(lowercasedSearchTerm) ||
+      emp.employeeId.toLowerCase().includes(lowercasedSearchTerm) ||
+      (emp.email || '').toLowerCase().includes(lowercasedSearchTerm) ||
+      emp.position.toLowerCase().includes(lowercasedSearchTerm)
+    );
+  }, [employees, employeeSearchTerm]);
+
   // --- Client-side filtering for modal based on userSearchTerm ---
   useEffect(() => {
     if (userSearchTerm) {
       setFilteredUsersForModal(
         allAvailableUsers.filter(user =>
           user.name.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
-          user.id.toLowerCase().includes(userSearchTerm.toLowerCase()) // user.id is email here
+          user.email.toLowerCase().includes(userSearchTerm.toLowerCase())
         )
       );
     } else {
@@ -186,7 +206,7 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other',
-      phone: '',
+      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Reset role on close
@@ -219,7 +239,7 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other',
-      phone: '',
+      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Default role for new employee
@@ -238,7 +258,7 @@ const Employee: React.FC = () => {
   const handleEmployeeDetailsChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setEmployeeDetails(prev => ({ ...prev, [name]: value }));
-    if (name === 'employeeId') {
+    if (name === 'employeeId' || name === 'phone_number') {
       setEmployeeIdConflictError(null); // Reset conflict error when ID changes
     }
     setError(null); // Clear general form error on any change
@@ -266,10 +286,10 @@ const Employee: React.FC = () => {
         method: 'POST',
         headers: headers,
         body: JSON.stringify({
-          userEmail: selectedUserForEmployee.id,
+          userEmail: selectedUserForEmployee.email,
           employeeIdCode: employeeDetails.employeeId.trim(),
           position: employeeDetails.position,
-          phone: employeeDetails.phone?.trim() || null,
+          phone_number: employeeDetails.phone_number?.trim() || null,
           hireDate: employeeDetails.hireDate ? new Date(employeeDetails.hireDate).toISOString() : new Date().toISOString(),
           status: employeeDetails.status,
           role: employeeDetails.role,
@@ -307,12 +327,16 @@ const Employee: React.FC = () => {
         email: addedEmployeeData.email,
         position: addedEmployeeData.position,
         status: addedEmployeeData.status,
-        phone: addedEmployeeData.phone_number || undefined,
         hireDate: addedEmployeeData.hire_date ? new Date(addedEmployeeData.hire_date).toISOString().split('T')[0] : undefined,
         user: {
-          id: addedEmployeeData.email, 
+          internalId: addedEmployeeData.user_id?.toString() || '',
+          email: addedEmployeeData.email || '',
           name: addedEmployeeData.employeeName,
           role: addedEmployeeData.user_role,
+          avatar: addedEmployeeData.avatar_url || undefined,
+          referralCode: addedEmployeeData.referral_code || undefined,
+          phone_number: addedEmployeeData.phone_number || undefined,
+          address: addedEmployeeData.address || undefined,
         }
       };
       
@@ -337,7 +361,7 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
         employeeId: employeeToEdit.employeeId,
         position: employeeToEdit.position, 
-        phone: employeeToEdit.phone || '',
+        phone_number: employeeToEdit.user.phone_number || '',
         status: employeeToEdit.status,
         hireDate: employeeToEdit.hireDate ? new Date(employeeToEdit.hireDate).toISOString().split('T')[0] : '',
         role: employeeToEdit.user.role || 'employee',
@@ -365,7 +389,7 @@ const Employee: React.FC = () => {
           employeeIdCode: employeeDetails.employeeId.trim(),
           position: employeeDetails.position, 
           status: employeeDetails.status,
-          phoneNumber: employeeDetails.phone?.trim() || null,
+          phone_number: employeeDetails.phone_number?.trim() || null,
           hireDate: employeeDetails.hireDate ? new Date(employeeDetails.hireDate).toISOString() : undefined,
           role: employeeDetails.role,
         }),
@@ -398,12 +422,16 @@ const Employee: React.FC = () => {
         email: updatedEmployeeData.email,
         position: updatedEmployeeData.position,
         status: updatedEmployeeData.status,
-        phone: updatedEmployeeData.phone_number || undefined,
         hireDate: updatedEmployeeData.hire_date ? new Date(updatedEmployeeData.hire_date).toISOString().split('T')[0] : undefined,
         user: {
-          id: updatedEmployeeData.email,
+          internalId: updatedEmployeeData.user_id?.toString() || '',
+          email: updatedEmployeeData.email || '',
           name: updatedEmployeeData.employeeName,
           role: updatedEmployeeData.user_role,
+          avatar: updatedEmployeeData.avatar_url || undefined,
+          referralCode: updatedEmployeeData.referral_code || undefined,
+          phone_number: updatedEmployeeData.phone_number || undefined,
+          address: updatedEmployeeData.address || undefined,
         }
       };
 
@@ -476,7 +504,7 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other', 
-      phone: '',
+      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Reset role
@@ -508,9 +536,15 @@ const Employee: React.FC = () => {
               {isSaving ? 'Loading...' : '+ Add Employee'}
                      </button>
                  </div>
-          <input type="text" placeholder="Search employees..." className="form-input mb-4 text-sm" />
+          <input 
+            type="text" 
+            placeholder="Search employees..." 
+            className="form-input mb-4 text-sm" 
+            value={employeeSearchTerm}
+            onChange={(e) => setEmployeeSearchTerm(e.target.value)}
+          />
           <ul className="space-y-2 overflow-y-auto flex-1 pr-1">
-            {employees.map((emp: DisplayEmployee) => (
+            {filteredEmployees.map((emp: DisplayEmployee) => (
               <li 
                 key={emp.id}
                 onClick={() => handleSelectEmployee(emp)}
@@ -521,6 +555,11 @@ const Employee: React.FC = () => {
               </li>
             ))}
             {employees.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No employees found.</p>}
+            {employees.length > 0 && filteredEmployees.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-4">
+                No employees found matching "{employeeSearchTerm}".
+              </p>
+            )}
           </ul>
             </div>
 
@@ -536,10 +575,10 @@ const Employee: React.FC = () => {
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
               <p>Select an employee from the list to see details, or click "Add Employee" to add a new one.</p>
+                     </div>
+                    )} 
+                 </div>
             </div>
-          )}
-        </div>
-      </div>
       {isAddEmployeeModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div ref={modalRef} className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -577,13 +616,13 @@ const Employee: React.FC = () => {
                     <ul className="space-y-2 max-h-80 overflow-y-auto">
                       {filteredUsersForModal.map((user) => (
                         <li 
-                          key={user.id}
+                          key={user.internalId || user.email}
                           onClick={() => handleSelectUserFromModal(user)}
                           className={`p-3 rounded-lg cursor-pointer transition-colors hover:bg-amber-100 border border-gray-200 flex justify-between items-center`}
                         >
                           <div>
                             <p className="font-medium text-gray-800">{user.name}</p>
-                            <p className="text-xs text-gray-500">{user.id}</p>
+                            <p className="text-xs text-gray-500">{user.email}</p>
                           </div>
                           <span className="text-xs text-gray-400">{user.role}</span>
                         </li>
@@ -605,7 +644,7 @@ const Employee: React.FC = () => {
                       </p>
                       <p className="text-lg text-blue-800">
                         {editingEmployee ? editingEmployee.employeeName : selectedUserForEmployee!.name} 
-                        <span className="text-xs"> ({editingEmployee ? editingEmployee.email : selectedUserForEmployee!.id})</span>
+                        <span className="text-xs"> ({editingEmployee ? editingEmployee.email : selectedUserForEmployee!.email})</span>
                       </p>
                     </div>
                   )}
@@ -643,7 +682,7 @@ const Employee: React.FC = () => {
                       </select>
                     </FormItem>
                     <FormItem label="Phone">
-                      <input type="tel" name="phone" value={employeeDetails.phone} onChange={handleEmployeeDetailsChange} className="form-input" disabled={isSaving} />
+                      <input type="tel" name="phone_number" value={employeeDetails.phone_number || ''} onChange={handleEmployeeDetailsChange} className="form-input" disabled={isSaving} />
                     </FormItem>
                     {(!editingEmployee || (editingEmployee && employeeDetails.hireDate !== undefined)) && (
                       <FormItem label="Hire Date (YYYY-MM-DD)">
@@ -724,20 +763,20 @@ const EmployeeDetailsPanel: React.FC<EmployeeDetailsPanelProps> = ({ employee: e
                 <DetailItem label="Employee ID" value={employeeProp.employeeId} />
                 {employeeProp.email && <DetailItem label="Email" value={employeeProp.email} />} 
                 <DetailItem label="Position" value={employeeProp.position} />
-                <DetailItem label="Status"> 
+                  <DetailItem label="Status"> 
                   <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${ 
                       employeeProp.status === 'Active' ? 'bg-green-100 text-green-700' :
                       employeeProp.status === 'Inactive' ? 'bg-red-100 text-red-700' :
                       'bg-gray-100 text-gray-700'
                   }`}>
                       {employeeProp.status}
-                  </span>
-                </DetailItem>
-                <DetailItem label="Phone" value={employeeProp.phone || 'N/A'} />
+                       </span>
+                  </DetailItem>
+                <DetailItem label="Phone" value={employeeProp.user.phone_number || 'N/A'} />
                 <DetailItem label="Hire Date" value={employeeProp.hireDate ? new Date(employeeProp.hireDate).toLocaleDateString() : 'N/A'} />
                 {employeeProp.user && employeeProp.user.role && <DetailItem label="System Role" value={employeeProp.user.role} />}
-            </div>
-        </div>
+             </div>
+         </div>
     );
 };
 

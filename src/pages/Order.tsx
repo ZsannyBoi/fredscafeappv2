@@ -12,6 +12,7 @@ const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
   const [error, setError] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const userRole = user?.role; // Correctly initialize userRole
 
   // --- Moved fetchOrders outside useEffect and wrapped in useCallback ---
   const fetchOrders = useCallback(async () => {
@@ -118,7 +119,7 @@ const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
 
   // --- NEW: Function to handle archiving an order ---
   const handleArchiveOrder = async (orderId: string) => {
-    if (!user || user.role !== 'manager') {
+    if (!user || (user.role !== 'manager' && user.role !== 'cashier')) {
       alert('Permission denied.'); // Should not happen if button is hidden, but good practice
       return;
     }
@@ -236,7 +237,7 @@ const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
                 </span>
               </div>
               <div className="flex gap-2">
-                {order.status === 'pending' && (
+                {order.status === 'pending' && ['manager', 'cashier', 'employee'].includes(userRole || '') && (
                   <button
                     onClick={() => handleUpdateStatus(order.id, 'preparing')}
                     className="px-3 py-1 text-white rounded-lg bg-green-500 hover:bg-green-600"
@@ -245,38 +246,36 @@ const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
                     Accept
                   </button>
                 )}
-                {order.status === 'preparing' && (
+                {order.status === 'preparing' && ['manager', 'cook', 'employee'].includes(userRole || '') && (
                   <button
                     onClick={() => handleUpdateStatus(order.id, 'ready')}
-                    className="px-3 py-1 bg-blue-500 text-white rounded-lg"
+                    className="px-3 py-1 text-white rounded-lg bg-blue-500 hover:bg-blue-600"
                   >
                     Mark Ready
                   </button>
                 )}
-                {order.status === 'ready' && (
+                {order.status === 'ready' && ['manager', 'cashier', 'employee'].includes(userRole || '') && (
                   <button
                     onClick={() => handleUpdateStatus(order.id, 'completed')}
-                    className="px-3 py-1 bg-green-500 text-white rounded-lg"
+                    className="px-3 py-1 text-white rounded-lg bg-purple-500 hover:bg-purple-600"
                   >
                     Complete
                   </button>
                 )}
-                {/* Show Archive button only for managers on completed orders */}
-                {user?.role === 'manager' && order.status === 'completed' && (
-                   <button
-                    onClick={() => handleArchiveOrder(order.id)}
-                    className="px-3 py-1 bg-gray-500 text-white rounded-lg text-xs hover:bg-gray-600"
-                    title="Archive Order"
-                  >
-                    Archive
-                  </button>
-                )}
-                {['pending', 'preparing'].includes(order.status) && (
+                {order.status !== 'completed' && order.status !== 'cancelled' && ['manager', 'cashier'].includes(userRole || '') && (
                   <button
                     onClick={() => handleUpdateStatus(order.id, 'cancelled')}
-                    className="px-3 py-1 bg-red-500 text-white rounded-lg"
+                    className="px-3 py-1 text-white rounded-lg bg-red-500 hover:bg-red-600"
                   >
                     Cancel
+                  </button>
+                )}
+                {(order.status === 'completed' || order.status === 'cancelled') && ['manager', 'cashier'].includes(userRole || '') && (
+                  <button
+                    onClick={() => handleArchiveOrder(order.id)}
+                    className="px-3 py-1 text-white rounded-lg bg-gray-500 hover:bg-gray-600"
+                  >
+                    Archive
                   </button>
                 )}
               </div>

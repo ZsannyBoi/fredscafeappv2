@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SettingsData } from '../types'; // Import SettingsData
+import { SettingsData, User } from '../types'; // Import SettingsData and User
 
 type SettingsCategory = 'General' | 'Display' | 'Privacy and security' | 'Notifications' | 'Support' | 'About';
 
@@ -16,7 +16,12 @@ type SettingsCategory = 'General' | 'Display' | 'Privacy and security' | 'Notifi
 //     };
 // }
 
-const Settings: React.FC = () => {
+// Component props
+interface SettingsProps {
+  user?: User | null; // Add user prop
+}
+
+const Settings: React.FC<SettingsProps> = ({ user }) => {
   const [activeSetting, setActiveSetting] = useState<SettingsCategory>('General');
   const [settings, setSettings] = useState<SettingsData>({
     notifications: {
@@ -244,15 +249,58 @@ const Settings: React.FC = () => {
     };
   }, [settings.profileBanner.value, settings.profileBanner.type]); // Re-run if blob URL or type changes
 
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Make sure user is logged in
+    if (!user || !user.internalId) {
+      alert("You must be logged in to change your password.");
+      return;
+    }
+    
+    // Validate password match
     if (passwordData.newPassword !== passwordData.confirmPassword) {
       alert("New passwords do not match!");
       return;
     }
-    console.log("Changing password...", passwordData);
-    alert("Password change submitted (check console).");
-    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    
+    // Validate password length
+    if (passwordData.newPassword.length < 6) {
+      alert("New password must be at least 6 characters long.");
+      return;
+    }
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error("Authentication token missing. Please log in again.");
+      }
+      
+      const response = await fetch(`http://localhost:3001/api/users/${user.internalId}/password`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          currentPassword: passwordData.currentPassword,
+          newPassword: passwordData.newPassword
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      alert(data.message || "Password updated successfully!");
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      
+    } catch (error: any) {
+      console.error("Error updating password:", error);
+      alert(error.message || "Failed to update password. Please try again.");
+    }
   };
 
   const handleSaveChanges = () => {

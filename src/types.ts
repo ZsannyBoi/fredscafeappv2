@@ -1,9 +1,12 @@
 export interface User {
-  id: string; // Email
+  internalId: string; // A stable, non-sensitive identifier for API calls
+  email: string; // User's email address (used for login and display)
   name: string;
   role: 'manager' | 'employee' | 'cashier' | 'cook' | 'customer';
   referralCode?: string; // Added for referral system
   avatar?: string; // Added for user avatar
+  phone_number?: string; // Add phone_number to User interface
+  address?: string; // Add address to User interface
 }
 
 // Interface for time-based reward availability
@@ -24,9 +27,9 @@ export interface RawRewardItemCriteria {
   isBirthdayOnly?: boolean;
   minPurchasesMonthly?: number;
   allowedDaysOfWeek?: number[]; // 0 for Sunday, 6 for Saturday
-  activeTimeWindows?: TimeWindow[]; 
-  requiredCustomerTier?: string[]; 
-  isSignUpBonus?: boolean; 
+  activeTimeWindows?: TimeWindow[];
+  requiredCustomerTier?: string[];
+  isSignUpBonus?: boolean;
   isReferralBonusForNewUser?: boolean; // Added for referral system
   isRewardForReferringUser?: boolean;  // Added for referral system
   minReferrals?: number;
@@ -38,23 +41,42 @@ export interface RawRewardItemCriteria {
 }
 
 export interface RawRewardItem {
-  id: string;
+  reward_id: string; // Primary identifier
   name: string;
-  description?: string; // More detailed explanation of the reward
-  image: string;
+  description?: string;
+  image_url?: string;
   type: 'standard' | 'voucher' | 'discount_coupon' | 'loyalty_tier_perk' | 'manual_grant';
-  
-  criteria?: RawRewardItemCriteria; // Criteria to EARN/BE ELIGIBLE for this reward. Optional for manually granted rewards.
-  
-  // What the reward GIVES when claimed/applied
-  pointsCost?: number; // How many points it costs to claim this reward (if it's a point redemption)
-  freeMenuItemIds?: string[]; // IDs of menu items given for free
-  discountPercentage?: number; // e.g., 10 for 10%
-  discountFixedAmount?: number; // e.g., 5 for $5 off
-  // For loyalty_tier_perk, the benefit might be intrinsic to the tier (e.g. permanent 5% discount)
 
-  earningHint?: string; // Textual hint on how to earn or use
-  // Removed: size, color, addOns, quantity - these should be part of product details if reward is a specific product.
+  // Fields from criteria_json (will be parsed on frontend)
+  criteria_json?: string;
+
+  // What the reward GIVES when claimed/applied
+  points_cost?: number;
+  free_menu_item_ids?: string[]; // Always an array when present
+  discount_percentage?: number;
+  discount_fixed_amount?: number;
+  earning_hint?: string;
+
+  // Timestamps from backend
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Interface for reward data AFTER fetching and processing (camelCase for frontend use)
+export interface ProcessedRewardItem {
+    id: string; // Frontend ID, typically mapped from backend's reward_id
+    reward_id: string; // Keep backend ID for clarity if needed
+    name: string;
+    description?: string;
+    image: string; // Mapped from image_url, using frontend name
+    type: RawRewardItem['type'];
+    pointsCost?: number; // Mapped from points_cost
+    discountPercentage?: number; // Mapped from discount_percentage
+    discountFixedAmount?: number; // Mapped from discount_fixed_amount
+    earningHint?: string; // Mapped from earning_hint
+    criteria?: RawRewardItemCriteria; // Parsed criteria object
+    freeMenuItemIds: string[]; // Mapped from free_menu_item_ids (as an array)
+    // Add other processed fields here as needed (e.g., dates)
 }
 
 export interface CustomerVoucher {
@@ -92,6 +114,7 @@ export interface CustomerInfo {
 
   // Vouchers/coupons currently held by the customer
   activeVouchers?: CustomerVoucher[];
+  claimedGeneralRewardIds?: string[]; // Added: IDs of general rewards already claimed by the customer
 }
 
 // --- Existing Order & App Types (customerId already added to OrderItem) ---
@@ -112,14 +135,48 @@ export interface OrderItem {
 
 export interface PlacedOrderItemDetail {
   productId: string;
-  name: string; // Keep name for potential backend cross-check or logging
+  name: string;
   quantity: number;
-  selectedOptionIds: Record<string, string | string[]>; // e.g., { '1': '3', '4': ['11', '12'] } (groupId: optionId | optionIds)
+  selectedOptionIds: Record<string, string | string[]>;
+  isRewardItem?: boolean; // Whether this is a free item from a reward
+  rewardId?: string; // The reward this item is associated with
+  price?: number; // Include original price for reference when it's a free item
 }
 
 export interface NewOrderData {
   customerName: string;
   items: PlacedOrderItemDetail[];
+  redeemedRewards?: RedeemedReward[]; // Rewards that were applied to this order
+  userId?: string;
+}
+
+// Type for rewards applied to an order
+export interface RedeemedReward {
+  rewardId: string;
+  rewardType: string;
+  voucherId?: string; // For voucher rewards
+  appliedDiscount?: {
+    type: 'percentage' | 'fixed';
+    value: number;
+    originalTotal: number;
+    discountedTotal: number;
+  };
+  freeItems?: string[]; // Product IDs of free items
+}
+
+// Available rewards for a customer to choose from during checkout
+export interface AvailableReward {
+  id: string;
+  name: string;
+  description?: string;
+  type: RawRewardItem['type'];
+  pointsCost?: number;
+  discountPercentage?: number;
+  discountFixedAmount?: number;
+  freeMenuItemIds?: string[];
+  isVoucher?: boolean;
+  instanceId?: string; // For vouchers
+  image?: string;
 }
 
 // --- Application Settings Type ---
@@ -138,9 +195,9 @@ export interface SettingsData {
 
 // --- Product and Menu Related Types ---
 export interface ProductOption {
-  id?: string; // Optional: Unique ID for managing options in forms (e.g., EditMenu)
+  id: string; // Optional: Unique ID for managing options in forms (e.g., EditMenu)
   label: string;
-  // value?: string; 
+  value?: string; // Added/uncommented: Optional value for the option
   priceModifier?: number; // Optional: e.g., +$0.50 for Almond Milk
 }
 
@@ -161,7 +218,7 @@ export interface Product {
   category: string; // Use string to allow dynamic category creation/editing
   description?: string; 
   optionCategories?: OptionCategory[]; 
-  availability?: 'available' | 'unavailable' | 'limited'; 
+  availability?: 'available' | 'unavailable'; // Removed 'limited'
   tags?: string[]; 
 }
 
@@ -184,7 +241,6 @@ export interface EmployeeData {
   position: 'Manager' | 'Barista' | 'Cashier' | 'Cook' | 'Shift Lead' | 'Other'; 
   status: 'Active' | 'Inactive';
   email?: string;
-  phone?: string;
   hireDate?: string; // ISO Date string (e.g., "YYYY-MM-DD")
   // Add other relevant details like emergencyContact, payRate, etc. if needed for the system.
 }
@@ -192,7 +248,6 @@ export interface EmployeeData {
 export interface EmployeeFormDetails {
   employeeId: string;
   position: EmployeeData['position']; // Use the position type from EmployeeData
-  phone?: string;
   status: EmployeeData['status']; // Use the status type from EmployeeData
   hireDate?: string;
   role?: User['role']; // Added for managing user's system role

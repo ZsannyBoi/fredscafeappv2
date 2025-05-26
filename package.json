@@ -13,9 +13,11 @@
     "@tailwindcss/postcss": "^4.0.16",
     "@tailwindcss/vite": "^4.0.16",
     "autoprefixer": "^10.4.21",
+    "multer": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.4.0",
+    "react-toastify": "^11.0.5",
     "tailwindcss": "^4.0.16",
     "uuid": "^11.1.0"
   },

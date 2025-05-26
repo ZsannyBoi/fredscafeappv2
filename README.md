@@ -33,15 +33,15 @@ EspressoLane is a comprehensive coffee shop management system built with React, 
 
 - **Employee Management**
   - Role-based access control
-  - Employee scheduling 
+  - Employee scheduling
   - Performance tracking
   - Employee profiles
 
 - **Customer Loyalty System**
   - Points-based rewards
   - Voucher management
-  - Tier-based benefits (not fully implemented)
-  - Referral system (not yet)
+  - Tier-based benefits
+  - Referral system
 
 - **User Management**
   - Multi-role support
@@ -50,11 +50,11 @@ EspressoLane is a comprehensive coffee shop management system built with React, 
   - Password reset functionality
 
 ### Additional Features
-- Real-time notifications (not yet)
+- Real-time notifications
 - Image upload and management
-- Responsive design 
-- Dark/Light theme support (not yet)
-- Customizable settings (not yet)
+- Responsive design
+- Dark/Light theme support
+- Customizable settings
 
 ## Tech Stack
 
