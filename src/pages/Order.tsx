@@ -4,9 +4,11 @@ import { OrderItem, User } from '../types'; // Import OrderItem and User
 // Define props for the Order component
 interface OrderPageProps {
   user: User | null; // Add user prop definition
+  selectedOrderId: string | null; // Add selectedOrderId prop
+  setSelectedOrderId: (orderId: string | null) => void; // Add setSelectedOrderId prop
 }
 
-const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
+const Order: React.FC<OrderPageProps> = ({ user, selectedOrderId, setSelectedOrderId }) => { // Accept props
   const [localOrders, setLocalOrders] = useState<OrderItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +62,21 @@ const Order: React.FC<OrderPageProps> = ({ user }) => { // Accept user prop
   // Client-side filtering (update to use localOrders)
   // Consider backend filtering for better performance
   const filteredOrders = localOrders.filter(order =>
-    order.ticketNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    order.customerName.toLowerCase().includes(searchQuery.toLowerCase())
+    // If selectedOrderId is not null, only show that specific order
+    (selectedOrderId ? order.id === selectedOrderId : true) &&
+    (searchQuery ? 
+      order.ticketNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      order.customerName.toLowerCase().includes(searchQuery.toLowerCase())
+      : true)
   );
+
+  // Effect to clear selectedOrderId when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clear the selected order ID when the component unmounts
+      setSelectedOrderId(null);
+    };
+  }, [setSelectedOrderId]);
 
   // --- New function to handle status updates via API ---
   const handleUpdateStatus = async (orderId: string, newStatus: OrderItem['status']) => {

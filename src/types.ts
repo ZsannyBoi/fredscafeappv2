@@ -133,6 +133,13 @@ export interface OrderItem {
   ticketNumber: string;
 }
 
+export interface OrderResponse {
+  id: string;
+  orderId?: string;
+  timestamp: string;
+  ticketNumber: string;
+}
+
 export interface PlacedOrderItemDetail {
   productId: string;
   name: string;
@@ -141,6 +148,8 @@ export interface PlacedOrderItemDetail {
   isRewardItem?: boolean; // Whether this is a free item from a reward
   rewardId?: string; // The reward this item is associated with
   price?: number; // Include original price for reference when it's a free item
+  unitPriceSnapshot?: number; // Price per item including options
+  selectedOptionsSnapshot?: { group: string, option: string }[]; // Array of option details
 }
 
 export interface NewOrderData {
@@ -181,10 +190,7 @@ export interface AvailableReward {
 
 // --- Application Settings Type ---
 export interface SettingsData {
-    notifications: {
-        email: boolean;
-        sms: boolean;
-    };
+    autoSave: boolean;
     theme: 'light' | 'dark'; // Could be expanded with 'system' later
     profileBanner: {
         type: 'color' | 'image';

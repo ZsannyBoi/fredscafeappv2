@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SettingsData, User } from '../types'; // Import SettingsData and User
+import { uploadImage } from '../utils/imageUpload'; // Import the uploadImage utility
 
 type SettingsCategory = 'General' | 'Display' | 'Privacy and security' | 'Notifications' | 'Support' | 'About';
 
@@ -19,21 +20,23 @@ type SettingsCategory = 'General' | 'Display' | 'Privacy and security' | 'Notifi
 // Component props
 interface SettingsProps {
   user?: User | null; // Add user prop
+  updateUser?: (userData: Partial<User>) => void; // Add updateUser prop
 }
 
-const Settings: React.FC<SettingsProps> = ({ user }) => {
+const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
   const [activeSetting, setActiveSetting] = useState<SettingsCategory>('General');
   const [settings, setSettings] = useState<SettingsData>({
-    notifications: {
-      email: true,
-      sms: false,
-    },
+    autoSave: false,
     theme: 'light',
     profileBanner: {
       type: 'color', // Default to color
       value: '#a7f3d0', // Default to emerald-100 hex
     }
   });
+  
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
 
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
@@ -49,6 +52,47 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
     'Support',
     'About'
   ];
+  
+  // Fetch user settings when component mounts or user changes
+  useEffect(() => {
+    if (user?.internalId) {
+      fetchUserSettings();
+    }
+  }, [user?.internalId]);
+  
+  const fetchUserSettings = async () => {
+    if (!user?.internalId) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error("Authentication token missing. Please log in again.");
+      }
+      
+      const response = await fetch(`http://localhost:3001/api/users/${user.internalId}/settings`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Error: ${response.status}`);
+      }
+      
+      const userSettings = await response.json();
+      setSettings(userSettings);
+    } catch (error: any) {
+      console.error("Error fetching user settings:", error);
+      setError(error.message || "Failed to fetch user settings.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const renderSettingContent = () => {
     switch (activeSetting) {
@@ -59,16 +103,15 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
             <p className="text-gray-600 mb-4">Configure basic application settings here.</p>
             <div className="space-y-4">
               <label className="flex items-center">
-                <input type="checkbox" className="form-checkbox h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" />
+                <input 
+                  type="checkbox" 
+                  checked={settings.autoSave} 
+                  onChange={handleNotificationChange} 
+                  className="form-checkbox h-5 w-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
+                />
                 <span className="ml-2 text-sm text-gray-700">Enable Auto-Save</span>
               </label>
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">Default Language</span>
-                <select className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm py-2 px-3">
-                  <option>English</option>
-                  <option>Spanish</option>
-                </select>
-              </label>
+              {/* We'll leave language implementation for later */}
             </div>
           </div>
         );
@@ -90,27 +133,81 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
                   {/* <option value="system">System</option> */}
                 </select>
               </label>
-              {/* Example Profile Banner Customization - can be expanded */}
+              {/* Profile Banner Customization */}
               <fieldset className="mt-6">
                 <legend className="text-sm font-medium text-gray-700 mb-2">Profile Banner Style</legend>
-                <div className="space-y-2">
+                <div className="space-y-4">
+                  <div className="flex items-center">
                     <label className="flex items-center">
-                        <input type="radio" name="bannerType" value="color" checked={settings.profileBanner.type === 'color'} onChange={handleBannerTypeChange} className="form-radio h-4 w-4 text-blue-600"/>
-                        <span className="ml-2 text-sm text-gray-700">Color</span>
+                      <input 
+                        type="radio" 
+                        name="bannerType" 
+                        value="color" 
+                        checked={settings.profileBanner.type === 'color'} 
+                        onChange={handleBannerTypeChange} 
+                        className="form-radio h-4 w-4 text-blue-600"
+                      />
+                      <span className="ml-2 text-sm text-gray-700">Color</span>
                     </label>
                     {settings.profileBanner.type === 'color' && (
-                        <input type="color" value={settings.profileBanner.value} onChange={handleBannerValueChange} className="ml-6 h-8 w-16 rounded border-gray-300" />
+                      <input 
+                        type="color" 
+                        value={settings.profileBanner.value} 
+                        onChange={handleBannerValueChange} 
+                        className="ml-6 h-8 w-16 rounded border-gray-300" 
+                      />
                     )}
+                  </div>
+                  
+                  <div className="flex flex-col">
                     <label className="flex items-center">
-                        <input type="radio" name="bannerType" value="image" checked={settings.profileBanner.type === 'image'} onChange={handleBannerTypeChange} className="form-radio h-4 w-4 text-blue-600"/>
-                        <span className="ml-2 text-sm text-gray-700">Image</span>
+                      <input 
+                        type="radio" 
+                        name="bannerType" 
+                        value="image" 
+                        checked={settings.profileBanner.type === 'image'} 
+                        onChange={handleBannerTypeChange} 
+                        className="form-radio h-4 w-4 text-blue-600"
+                      />
+                      <span className="ml-2 text-sm text-gray-700">Image</span>
                     </label>
+                    
                     {settings.profileBanner.type === 'image' && (
-                        <input type="file" accept="image/*" onChange={handleBannerImageChange} className="ml-6 text-sm" />
+                      <div className="mt-3 ml-6">
+                        <label className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          {loading ? 'Uploading...' : 'Choose Image'}
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={handleBannerImageChange} 
+                            className="hidden" 
+                            disabled={loading}
+                          />
+                        </label>
+                        
+                        {error && (
+                          <p className="mt-2 text-sm text-red-600">{error}</p>
+                        )}
+                        
+                        {settings.profileBanner.value && (
+                          <div className="mt-3">
+                            <div className="relative w-full max-w-md h-32 rounded-lg overflow-hidden border border-gray-200">
+                              <img 
+                                src={settings.profileBanner.value.startsWith('http') 
+                                  ? settings.profileBanner.value 
+                                  : `http://localhost:3001${settings.profileBanner.value}`} 
+                                alt="Banner preview" 
+                                className="w-full h-full object-cover" 
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
-                    {settings.profileBanner.type === 'image' && settings.profileBanner.value && (
-                         <img src={settings.profileBanner.value} alt="Banner preview" className="ml-6 mt-2 w-full max-w-xs h-auto rounded shadow" />
-                    )}
+                  </div>
                 </div>
               </fieldset>
             </div>
@@ -151,8 +248,25 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
         return (
           <div>
             <h2 className="text-xl font-semibold text-brown-800 mb-4">Notifications</h2>
-            <p className="text-gray-600 mb-4">Configure how you receive notifications.</p>
-             {/* Add notification settings form elements */}
+            <p className="text-gray-600 mb-4">Notification settings will be implemented later with React Toastify.</p>
+            
+            <div className="mt-6">
+              <button 
+                onClick={handleSaveChanges} 
+                disabled={loading} 
+                className={`px-4 py-2 rounded-lg text-white text-sm ${loading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} transition-colors`}
+              >
+                {loading ? 'Saving...' : 'Save Changes'}
+              </button>
+              
+              {saveSuccess && (
+                <span className="ml-3 text-sm text-green-600">Settings saved successfully!</span>
+              )}
+              
+              {error && (
+                <p className="mt-2 text-sm text-red-600">{error}</p>
+              )}
+            </div>
           </div>
         );
       case 'Support':
@@ -177,14 +291,6 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
   };
 
   // --- Handlers ---
-  const handleNotificationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, checked } = e.target;
-    setSettings(prev => ({
-      ...prev,
-      notifications: { ...prev.notifications, [name]: checked }
-    }));
-  };
-
   const handleThemeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSettings(prev => ({
       ...prev,
@@ -217,37 +323,37 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
     }));
   };
 
-  const handleBannerImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBannerImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      // Revoke previous object URL if one exists from a previous selection in this session
-      if (settings.profileBanner.type === 'image' && settings.profileBanner.value.startsWith('blob:')) {
-        URL.revokeObjectURL(settings.profileBanner.value);
+      
+      // Set loading state while uploading
+      setLoading(true);
+      setError(null);
+      
+      try {
+        // Upload the image to the server
+        const imageUrl = await uploadImage(file);
+        
+        // Update settings with the server-side image URL
+        setSettings(prev => ({
+          ...prev,
+          profileBanner: { 
+            ...prev.profileBanner, 
+            type: 'image', 
+            value: imageUrl 
+          }
+        }));
+      } catch (err: any) {
+        console.error("Error uploading banner image:", err);
+        setError("Failed to upload banner image. Please try again.");
+      } finally {
+        setLoading(false);
       }
-      const tempImageUrl = URL.createObjectURL(file); 
-      setSettings(prev => ({
-        ...prev,
-        profileBanner: { ...prev.profileBanner, type: 'image', value: tempImageUrl }
-      }));
     }
   };
 
-  useEffect(() => {
-    // This effect handles the cleanup of the blob URL when the component unmounts
-    // or when the banner value changes from a blob URL to something else (e.g., color or different image).
-    let currentBlobUrl: string | null = null;
-
-    if (settings.profileBanner.type === 'image' && settings.profileBanner.value.startsWith('blob:')) {
-      currentBlobUrl = settings.profileBanner.value;
-    }
-
-    return () => {
-      if (currentBlobUrl) {
-        URL.revokeObjectURL(currentBlobUrl);
-        // console.log("Revoked blob URL on cleanup:", currentBlobUrl);
-      }
-    };
-  }, [settings.profileBanner.value, settings.profileBanner.type]); // Re-run if blob URL or type changes
+  // Banner images are now stored on the server, no need to cleanup blob URLs
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,20 +409,78 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
     }
   };
 
-  const handleSaveChanges = () => {
-    console.log("Saving Settings:", settings);
-    alert("Settings saved (check console).");
+  const handleNotificationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // This is now used for autoSave
+    setSettings(prev => ({
+      ...prev,
+      autoSave: e.target.checked
+    }));
+  };
+
+  const handleSaveChanges = async () => {
+    if (!user?.internalId) {
+      alert("You must be logged in to save settings.");
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    setSaveSuccess(false);
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error("Authentication token missing. Please log in again.");
+      }
+      
+      const response = await fetch(`http://localhost:3001/api/users/${user.internalId}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(settings)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log("Settings saved:", data);
+      setSaveSuccess(true);
+      
+      // Apply theme changes immediately
+      document.documentElement.classList.remove('light', 'dark');
+      document.documentElement.classList.add(settings.theme);
+      
+      // Hide success message after 3 seconds
+      setTimeout(() => {
+        setSaveSuccess(false);
+      }, 3000);
+    } catch (error: any) {
+      console.error("Error saving settings:", error);
+      setError(error.message || "Failed to save settings.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="text-brown-800 p-6">
       <h1 className="text-3xl font-medium mb-8">Settings</h1>
-
-      <div className="flex gap-6">
-        {/* Settings Categories Sidebar */}
-        <div className="w-64 bg-white rounded-2xl p-4 shadow-sm flex flex-col relative border border-gray-100 min-h-[60vh]">
-          <nav className="space-y-1 flex-1">
-             {settingCategories.map(category => (
+      
+      {!user ? (
+        <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200 text-yellow-800">
+          Please log in to access your settings.
+        </div>
+      ) : (
+        <div className="flex gap-6">
+          {/* Settings Categories Sidebar */}
+          <div className="w-64 bg-white rounded-2xl p-4 shadow-sm flex flex-col relative border border-gray-100 min-h-[60vh]">
+            <nav className="space-y-1 flex-1">
+              {settingCategories.map(category => (
                 <button 
                     key={category} 
                     onClick={() => setActiveSetting(category)}
@@ -332,16 +496,38 @@ const Settings: React.FC<SettingsProps> = ({ user }) => {
                        <span className="w-1 h-6 bg-brown-800 rounded-full absolute right-0 mr-[-16px]"></span> 
                      )}
                 </button>
-             ))}
-          </nav>
-        </div>
-        
-        {/* Settings Content Area */}
-        <div className="flex-1 bg-white rounded-2xl p-6 shadow-sm border border-gray-100 min-h-[60vh]">
-           {/* Render content based on selection */}
+              ))}
+            </nav>
+          </div>
+          
+          {/* Settings Content Area */}
+          <div className="flex-1 bg-white rounded-2xl p-6 shadow-sm border border-gray-100 min-h-[60vh]">
+            {/* Render content based on selection */}
             {renderSettingContent()}
+            
+            {/* Common Save Button (except for About and Support sections) */}
+            {(activeSetting !== 'About' && activeSetting !== 'Support' && activeSetting !== 'Privacy and security' && activeSetting !== 'Notifications') && (
+              <div className="mt-8 pt-4 border-t border-gray-200">
+                <button 
+                  onClick={handleSaveChanges} 
+                  disabled={loading} 
+                  className={`px-4 py-2 rounded-lg text-white text-sm ${loading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} transition-colors`}
+                >
+                  {loading ? 'Saving...' : 'Save Changes'}
+                </button>
+                
+                {saveSuccess && (
+                  <span className="ml-3 text-sm text-green-600">Settings saved successfully!</span>
+                )}
+                
+                {error && (
+                  <p className="mt-2 text-sm text-red-600">{error}</p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

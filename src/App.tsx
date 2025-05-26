@@ -1,5 +1,5 @@
-import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Route, Routes, Navigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
 import Home from './pages/Home';
 import Menu from './pages/Menu';
 import Rewards from './pages/Rewards';
@@ -13,14 +13,17 @@ import EditRewards from './pages/EditRewards';
 import TestApproval from './pages/TestApproval';
 import CheckoutSuccess from './pages/CheckoutSuccess';
 import ResetPassword from './pages/ResetPassword';
-import { User, PlacedOrderItemDetail, NewOrderData } from './types'; // Keep needed types
+import LandingPage from './pages/LandingPage';
+import { User, PlacedOrderItemDetail, NewOrderData, OrderResponse } from './types'; // Keep needed types
 import { v4 as uuidv4 } from 'uuid';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [activePage, setActivePage] = useState<string>('Home');
   const [authChecked, setAuthChecked] = useState<boolean>(false); // State to track initial auth check
-  const [authError, setAuthError] = useState<string | null>(null); // New state for auth errors
+  const [authError, setAuthError] = useState<string | null>(null); // Track auth errors for UI
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null); // Add state for selected order
+  const [showLoginForm, setShowLoginForm] = useState<'login' | 'signup' | 'forgotPassword'>('login');
 
   // --- Check for existing token and fetch user data on initial load ---
   useEffect(() => {
@@ -93,7 +96,7 @@ function App() {
       setUser(prevUser => prevUser ? { ...prevUser, ...userData } : null);
   };
 
-  const placeNewOrder = async (newOrderData: NewOrderData) => {
+  const placeNewOrder = async (newOrderData: NewOrderData): Promise<OrderResponse> => {
     if (!user) {
       console.error("Cannot place order: No authenticated user found.");
       alert("Authentication error. Please log in again.");
@@ -139,8 +142,12 @@ function App() {
             if (event.data.type === 'ORDER_COMPLETED') {
               // Remove the event listener
               window.removeEventListener('message', messageHandler);
-              // Resolve the promise with success
-              resolve(true);
+              // Resolve the promise with order details
+              resolve({
+                id: orderResult.orderId,
+                timestamp: orderResult.timestamp || new Date().toISOString(),
+                ticketNumber: orderResult.ticketNumber || 'N/A',
+              });
             } else if (event.data.type === 'ORDER_REJECTED') {
               // Remove the event listener
               window.removeEventListener('message', messageHandler);
@@ -160,7 +167,12 @@ function App() {
         });
       } else {
         console.log("Order processing initiated:", orderResult);
-        return true;
+        // Return order details
+        return {
+          id: orderResult.orderId || orderResult.id,
+          timestamp: orderResult.timestamp || new Date().toISOString(),
+          ticketNumber: orderResult.ticketNumber || orderResult.ticket_number || 'N/A',
+        };
       }
 
     } catch (error) {
@@ -226,7 +238,8 @@ function App() {
   const handleLogout = () => {
       localStorage.removeItem('authToken');
       setUser(null);
-      setActivePage('Home'); // Navigate to login/home after logout
+      // We don't need to set activePage anymore since we'll navigate away
+      // Navigate happens automatically via Routes when user becomes null
   };
 
   const grantVoucherFunction = async (customerId: string, rewardId: string, grantedByEmployeeId: string, notes?: string) => {
@@ -276,96 +289,98 @@ function App() {
     return <div className="flex items-center justify-center h-screen text-red-500">Authentication Error: {authError} <button onClick={() => { setAuthChecked(false); setAuthError(null); }} className="ml-2 px-2 py-1 bg-blue-500 text-white rounded rounded-lg">Retry</button></div>; // Simple retry button
   }
 
-  if (!user) {
-    console.log('[App.tsx] Rendering: User is null, showing LoginPage.');
-    return <LoginPage onLogin={handleLogin} />; // Removed unused props
-  }
+  // --- Authenticated app content ---
+  const renderAuthenticatedApp = () => {
+    return (
+      <div className="app flex h-screen bg-stone-100 overflow-hidden">
+        <Sidebar userRole={user!.role} activePage={activePage} setActivePage={setActivePage} onLogout={handleLogout}/>
+        <div className="content flex-1 p-6 overflow-y-auto">
+          {renderPage()}
+        </div>
+      </div>
+    );
+  };
 
-  console.log('[App.tsx] Rendering: User is authenticated, showing content.', user);
   const renderPage = () => {
     const UnauthorizedOrHome = () => {
-      alert("You do not have access to this page or it doesn\'t exist for your role. Returning to Home.");
-      // Home now fetches its own data
-      return <Home user={user} setActivePage={setActivePage} />; // Pass user prop to Home
-    }
+      // Redirect to Home if authorized, otherwise to login
+      return <Navigate to="/dashboard" />;
+    };
 
     // Ensure user and internalId are available before rendering pages that rely on them
     if (!user || !user.internalId) {
          console.log('[App.tsx] Rendering renderPage: User or user.internalId is missing.');
-         // This case should ideally be caught by the !user check before renderPage is called,
-         // but adding a safeguard here. If user exists but internalId doesn't, something is wrong.
-         // Returning null or a loading indicator might be better depending on desired UX.
-         return <div className="flex items-center justify-center h-screen">Authentication issue or data loading...</div>; // Or a specific error component
+         return <Navigate to="/login" />;
     }
 
     switch (activePage) {
       case 'Home':
-        // Pass only necessary props
-        return <Home user={user} setActivePage={setActivePage} />; // Pass user prop to Home
-      case 'Menu': 
-        return <Menu placeNewOrder={placeNewOrder} user={user} />; // Pass user prop
+        return <Home user={user} setActivePage={setActivePage} setSelectedOrderId={setSelectedOrderId} />;
+      case 'Menu':
+        return <Menu placeNewOrder={placeNewOrder} user={user} />;
       case 'Rewards':
         if (['manager', 'employee', 'cashier', 'customer'].includes(user.role)) {
-          // Determine target customer ID - staff defaults to showing their own info or a placeholder
-          // This logic might need refinement based on actual workflow
           const targetCustomerIdForView = user.internalId; // Use internalId
-          
-          // Rewards.tsx now fetches its own data using targetCustomerIdForView
           return <Rewards targetCustomerId={targetCustomerIdForView} user={user} />;
         }
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
       case 'Profile':
-        // Pass the updateUser function to the Profile component
         return <Profile user={user} updateUser={updateUser} />;
       case 'Settings':
-        return <Settings user={user} />;
+        return <Settings user={user} updateUser={updateUser} />;
       case 'Logout':
         return <Logout onLogout={handleLogout} />;
       case 'Orders':
         if (['manager', 'employee', 'cook', 'cashier'].includes(user.role)) {
-          return <Order user={user} />;
+          return <Order user={user} selectedOrderId={selectedOrderId} setSelectedOrderId={setSelectedOrderId} />;
         }
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
       case 'Edit Menu':
         if (user.role === 'manager') {
           return <EditMenu />;
         }
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
       case 'Edit Rewards':
         if (user.role === 'manager' || user.role === 'cashier') {
-          // EditRewards now fetches its own data. Keep grantVoucherFunction for now.
-          // grantVoucherFunction likely needs API call inside EditRewards too eventually.
           return <EditRewards
-                      // rewardsData removed 
-                      // onAddReward, onUpdateReward, onDeleteReward removed (needs API calls)
                       grantVoucherFunction={grantVoucherFunction}
                       loggedInUser={user}
                    />;
         }
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
       case 'Employee':
         if (user.role === 'manager') {
           return <Employee />;
         }
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
       default:
-        return <UnauthorizedOrHome />;
+        return <Navigate to="/dashboard" />;
     }
   };
 
   return (
     <Router>
       <Routes>
+        {/* Public routes */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={
+          user ? <Navigate to="/dashboard" /> : <LoginPage onLogin={handleLogin} initialForm="login" />
+        } />
+        <Route path="/register" element={
+          user ? <Navigate to="/dashboard" /> : <LoginPage onLogin={handleLogin} initialForm="signup" />
+        } />
         <Route path="/test-approval" element={<TestApproval />} />
         <Route path="/checkout-success" element={<CheckoutSuccess />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        
+        {/* Protected routes - redirect to landing if not authenticated */}
+        <Route path="/dashboard/*" element={
+          user ? renderAuthenticatedApp() : <Navigate to="/login" />
+        } />
+        
+        {/* Fallback route - redirect to landing or dashboard based on auth state */}
         <Route path="*" element={
-      <div className="app flex h-screen bg-stone-100 overflow-hidden">
-        <Sidebar userRole={user.role} activePage={activePage} setActivePage={setActivePage} onLogout={handleLogout}/>
-        <div className="content flex-1 p-6 overflow-y-auto">
-          {renderPage()}
-        </div>
-      </div>
+          user ? <Navigate to="/dashboard" /> : <Navigate to="/" />
         } />
       </Routes>
     </Router>
@@ -374,9 +389,10 @@ function App() {
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => void;
+  initialForm?: 'login' | 'signup' | 'forgotPassword';
 }
 
-const LoginPage = ({ onLogin }: LoginPageProps) => {
+const LoginPage = ({ onLogin, initialForm = 'login' }: LoginPageProps) => {
   const [loginFormData, setLoginFormData] = useState({
     email: '',
     password: ''
@@ -392,7 +408,7 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
   });
 
   // --- New State for Form Toggling ---
-  const [currentForm, setCurrentForm] = useState<'login' | 'signup' | 'forgotPassword'>('login'); // 'login', 'signup', or 'forgotPassword'
+  const [currentForm, setCurrentForm] = useState<'login' | 'signup' | 'forgotPassword'>(initialForm); // Use initialForm prop
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -555,14 +571,28 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
               <p className="text-xl text-gray-200 max-w-md">
                 Manage your cafe operations seamlessly, from orders to employees.
              </p>
-              {/* Removed Placeholder Text */}
-               {/* <h1 className="text-6xl font-serif text-white mt-10">PLACEHOLDER<br />TEXT</h1> */}
+             {/* Added Back to Home link */}
+             <Link to="/" className="text-white hover:text-emerald-200 mt-8 inline-flex items-center font-medium">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+                </svg>
+                Back to Home
+             </Link>
          </div>
       </div>
 
       {/* Right Login/Signup/Forgot Password Section */}
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8 lg:p-16">
         <div className="w-full max-w-sm"> {/* Reduced max-width slightly */}
+          {/* Mobile-only Back to Home link */}
+          <div className="lg:hidden mb-6">
+            <Link to="/" className="text-emerald-600 hover:text-emerald-700 flex items-center font-medium">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+              </svg>
+              Back to Home
+            </Link>
+          </div>
           <div className="text-center mb-10">
             {/* Replace with your actual logo */}
             <img src="/src/assets/logo.svg" alt="EspressoLane Logo" className="h-10 mx-auto mb-5" />
@@ -619,7 +649,7 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
             </div>
             <button
               type="submit"
-              className="w-full bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors font-semibold"
+              className="w-full bg-emerald-600 text-white py-3 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-colors font-semibold"
               disabled={loading}
             >
               {loading ? 'Logging in...' : 'Login'}
@@ -627,7 +657,7 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
             <p className="text-center text-sm text-gray-500">
               Don't have an account?
                     {/* Updated to call setShowSignup */}
-                    <button type="button" onClick={setShowSignup} className="font-medium text-blue-600 hover:text-blue-700 ml-1" disabled={loading}>
+                    <button type="button" onClick={setShowSignup} className="font-medium text-emerald-600 hover:text-emerald-700 ml-1" disabled={loading}>
                 Sign up now
                     </button>
             </p>
@@ -700,14 +730,14 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                     </div>
                     <button
                       type="submit"
-                      className="w-full bg-green-600 text-white py-3 rounded-xl hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors font-semibold"
+                      className="w-full bg-emerald-600 text-white py-3 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-colors font-semibold"
                       disabled={loading}
                     >
                         {loading ? 'Signing up...' : 'Sign Up'}
                     </button>
                      <p className="text-center text-sm text-gray-500">
                        Already have an account?
-                       <button type="button" onClick={setShowLogin} className="font-medium text-blue-600 hover:text-blue-700 ml-1" disabled={loading}>
+                       <button type="button" onClick={setShowLogin} className="font-medium text-emerald-600 hover:text-emerald-700 ml-1" disabled={loading}>
                          Login
                        </button>
                      </p>
@@ -733,14 +763,14 @@ const LoginPage = ({ onLogin }: LoginPageProps) => {
                      </div>
                      <button
                        type="submit"
-                       className="w-full bg-yellow-500 text-white py-3 rounded-xl hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-colors font-semibold"
+                       className="w-full bg-emerald-600 text-white py-3 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-colors font-semibold"
                        disabled={loading}
                      >
                          {loading ? 'Sending...' : 'Reset Password'}
                      </button>
                      <p className="text-center text-sm text-gray-500">
                         Remember your password?
-                        <button type="button" onClick={setShowLogin} className="font-medium text-blue-600 hover:text-blue-700 ml-1" disabled={loading}>
+                        <button type="button" onClick={setShowLogin} className="font-medium text-emerald-600 hover:text-emerald-700 ml-1" disabled={loading}>
                            Login
                         </button>
                      </p>

@@ -1109,7 +1109,8 @@ app.post('/api/login', async (req, res) => {
     const payload = {
         userId: user.user_id, // Use userId instead of user_id to match what authenticateToken expects
         email: user.email, // Include email in the token payload
-        role: user.role
+        role: user.role,
+        internalId: user.user_id.toString() // Add internalId to match what the frontend expects
     };
     // --- End Create JWT Payload ---
 
@@ -1229,6 +1230,134 @@ app.put('/api/users/:userId', authenticateToken, async (req, res) => {
 });
 
 // --- Order Routes ---
+
+// GET /api/orders/customer/:customerId - Fetch orders for a specific customer
+app.get('/api/orders/customer/:customerId', authenticateToken, async (req, res) => {
+  const { customerId } = req.params;
+  const limit = parseInt(req.query.limit) || null; // Get optional limit from query string
+  
+  // Log authentication info
+  console.log(`[GET /api/orders/customer/${customerId}] Auth Info - User ID: ${req.user.userId}, Internal ID: ${req.user.internalId}, role: ${req.user.role}`);
+  
+  // Authorization: only allow customers to see their own orders, or staff to see any customer's orders
+  const isStaffRole = ['manager', 'employee', 'cashier', 'cook'].includes(req.user.role);
+  if (req.user.role === 'customer' && String(req.user.userId) !== String(customerId) && String(req.user.internalId) !== String(customerId)) {
+    return res.status(403).json({ message: 'Forbidden: You can only view your own orders' });
+  }
+  
+  console.log(`[GET /api/orders/customer/${customerId}] Authorization passed`);
+
+  try {
+    // 1. Fetch orders for the specific customer
+    let ordersSql = `
+      SELECT
+        order_id,
+        customer_id,
+        customer_name_snapshot AS customer_name,
+        total_amount AS total,
+        status,
+        order_timestamp AS timestamp,
+        ticket_number
+      FROM Orders
+      WHERE customer_id = ?
+      AND is_archived = FALSE
+      ORDER BY order_timestamp DESC
+    `;
+    
+    console.log(`[GET /api/orders/customer/${customerId}] Running SQL with customerId:`, customerId);
+    let queryParams = [customerId];
+    
+    if (limit && limit > 0) {
+        ordersSql += ` LIMIT ?`;
+        queryParams.push(limit);
+    }
+    ordersSql += ';';
+
+    const [orders] = await db.query(ordersSql, queryParams);
+    console.log(`[GET /api/orders/customer/${customerId}] Fetched ${orders.length} orders.`);
+
+    // 2. Fetch line items for all these orders efficiently
+    const orderIds = orders.map(o => o.order_id);
+    let lineItems = [];
+    if (orderIds.length > 0) {
+      const lineItemsSql = `
+        SELECT
+          order_line_item_id,
+          order_id,
+          product_id,
+          product_name_snapshot AS product_name,
+          quantity
+        FROM OrderLineItems
+        WHERE order_id IN (?)
+        ORDER BY order_line_item_id ASC;
+      `;
+      [lineItems] = await db.query(lineItemsSql, [orderIds]);
+      console.log(`[GET /api/orders/customer/${customerId}] Fetched ${lineItems.length} line items.`);
+    }
+
+    // Fetch selected options for all relevant line items in one go
+    let selectedOptionsData = [];
+    const lineItemIds = lineItems.map(li => li.order_line_item_id);
+    if (lineItemIds.length > 0) {
+      const selectedOptionsSql = `
+        SELECT
+          olso.order_line_item_id,
+          olso.selected_option_label_snapshot,
+          og.name AS group_name
+        FROM OrderLineItem_SelectedOptions olso
+        JOIN Options o ON olso.option_id = o.option_id
+        JOIN OptionGroups og ON o.option_group_id = og.option_group_id
+        WHERE olso.order_line_item_id IN (?)
+        ORDER BY olso.order_line_item_id, og.option_group_id;
+      `;
+      [selectedOptionsData] = await db.query(selectedOptionsSql, [lineItemIds]);
+      console.log(`[GET /api/orders/customer/${customerId}] Fetched ${selectedOptionsData.length} selected options.`);
+    }
+
+    // Create a map for easy lookup of selected options per line item
+    const selectedOptionsMap = new Map();
+    selectedOptionsData.forEach(opt => {
+      if (!selectedOptionsMap.has(opt.order_line_item_id)) {
+        selectedOptionsMap.set(opt.order_line_item_id, []);
+      }
+      selectedOptionsMap.get(opt.order_line_item_id).push({ 
+        group: opt.group_name, 
+        option: opt.selected_option_label_snapshot 
+      });
+    });
+
+    // 3. Structure the data to match frontend OrderItem type
+    const results = orders.map(order => {
+      const itemsForOrder = lineItems
+        .filter(item => item.order_id === order.order_id)
+        .map(item => {
+          const customizations = selectedOptionsMap.get(item.order_line_item_id) || [];
+          return {
+            name: item.product_name,
+            quantity: item.quantity,
+            customizations: customizations,
+          };
+        });
+
+      return {
+        id: order.order_id,
+        customerId: order.customer_id,
+        customerName: order.customer_name,
+        items: itemsForOrder,
+        total: parseFloat(order.total),
+        status: order.status,
+        timestamp: order.timestamp,
+        ticketNumber: order.ticket_number,
+      };
+    });
+
+    res.json(results);
+
+  } catch (error) {
+    console.error(`Error fetching orders for customer ${customerId}:`, error);
+    res.status(500).json({ message: 'Error fetching customer orders', error: error.message });
+  }
+});
 
 // GET /api/orders - Fetch all orders with their line items (Added limit query param)
 app.get('/api/orders', authenticateToken, async (req, res) => {
@@ -2370,190 +2499,139 @@ app.post('/api/rewards/definitions', authenticateToken, validateRewardData, asyn
 });
 
 // PUT /api/rewards/definitions/:id - Update a reward definition
-app.put('/api/rewards/definitions/:id', authenticateToken, validateRewardData, async (req, res) => {
+app.put('/api/rewards/definitions/:id', authenticateToken, upload.single('image'), async (req, res) => {
   if (req.user.role !== 'manager') {
     return res.status(403).json({ message: 'Forbidden: Only managers can update reward definitions.' });
   }
   const { id } = req.params;
-  const { 
-    name, 
-    description, 
-    image_url, // Expect image_url from frontend
-    type, 
-    criteria_json, // Expect criteria_json directly 
-    points_cost,
-    free_menu_item_ids, // Match backend naming
-    discount_percentage, 
-    discount_fixed_amount, 
-    earning_hint 
-  } = req.body;
-
-  // Log the received data for debugging
-  console.log("Update reward request body:", {
-    name, description, image_url, type, 
-    criteria_json: criteria_json ? "(criteria json present)" : undefined,
-    points_cost, free_menu_item_ids, 
-    discount_percentage, discount_fixed_amount, earning_hint
-  });
-
-  // Check if at least one field is provided for update
-  if (![name, description, image_url, type, criteria_json, 
-        points_cost, free_menu_item_ids, discount_percentage, 
-        discount_fixed_amount, earning_hint].some(field => field !== undefined)) {
-    return res.status(400).json({ message: 'No update fields provided.' });
-  }
-
-  let connection; // Use connection for transaction
+  const updateData = req.body;
+  let connection;
 
   try {
     connection = await db.getConnection();
-    await connection.beginTransaction(); // Start transaction
+    await connection.beginTransaction();
 
-    // First, check if the reward exists
+    // Check if reward exists
     const [existingReward] = await connection.query(
-      'SELECT * FROM Rewards WHERE reward_id = ?',
+      'SELECT * FROM Rewards WHERE reward_id = ?', 
       [id]
     );
-    
+
     if (existingReward.length === 0) {
       await connection.rollback();
       return res.status(404).json({ message: 'Reward not found.' });
     }
+
+    // Handle file upload - if a file was uploaded, set the image_url
+    if (req.file) {
+      updateData.image_url = getUploadedFileUrl(req.file);
+    }
+
+    // If we're receiving JSON data (not multipart form data with file)
+    if (req.headers['content-type']?.includes('application/json')) {
+      // Parse and validate JSON fields if needed
+      if (updateData.free_menu_item_ids && Array.isArray(updateData.free_menu_item_ids)) {
+        // Free menu items will be handled separately
+      }
+
+      // Ensure numeric fields are properly formatted
+      if (updateData.points_cost !== undefined) {
+        updateData.points_cost = Number(updateData.points_cost);
+      }
+      if (updateData.discount_percentage !== undefined) {
+        updateData.discount_percentage = Number(updateData.discount_percentage);
+      }
+      if (updateData.discount_fixed_amount !== undefined) {
+        updateData.discount_fixed_amount = Number(updateData.discount_fixed_amount);
+      }
+    }
+
+    // Get old reward data for image cleanup
+    const oldImageUrl = existingReward[0].image_url;
+
+    // Update the reward table
+    const updateFields = { ...updateData };
     
-    // Get the current image path for possible deletion later
-    const currentImage = existingReward[0].image_url;
+    // Remove free_menu_item_ids from update fields (will be handled separately)
+    delete updateFields.free_menu_item_ids;
 
-    // Ensure image URL is properly formatted
-    let imageUrl = image_url !== undefined ? (image_url ? image_url.trim() : null) : undefined;
-    
-    // If image URL is relative and doesn't include /uploads/, add the uploads directory
-    if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('/src/assets') && !imageUrl.includes('/uploads/')) {
-      // Handle both with and without leading slash
-      imageUrl = '/uploads/' + imageUrl.replace(/^\/+/, '');
+    if (Object.keys(updateFields).length > 0) {
+      await connection.query('UPDATE Rewards SET ? WHERE reward_id = ?', [updateFields, id]);
     }
 
-    // 1. Update the main Rewards table (excluding free_menu_item_ids)
-    let setClauses = [];
-    let values = [];
-
-    if (name !== undefined) { setClauses.push('name = ?'); values.push(name.trim()); }
-    if (description !== undefined) { setClauses.push('description = ?'); values.push(description?.trim() || null); }
-    if (imageUrl !== undefined) { setClauses.push('image_url = ?'); values.push(imageUrl); }
-    if (type !== undefined) { setClauses.push('type = ?'); values.push(type); }
-    // Handle criteria_json as a string or object
-    if (criteria_json !== undefined) { 
-      setClauses.push('criteria_json = ?'); 
-      values.push(typeof criteria_json === 'string' ? criteria_json : JSON.stringify(criteria_json)); 
-    }
-    if (points_cost !== undefined) { setClauses.push('points_cost = ?'); values.push(points_cost); }
-    if (discount_percentage !== undefined) { setClauses.push('discount_percentage = ?'); values.push(discount_percentage); }
-    if (discount_fixed_amount !== undefined) { setClauses.push('discount_fixed_amount = ?'); values.push(discount_fixed_amount); }
-    if (earning_hint !== undefined) { setClauses.push('earning_hint = ?'); values.push(earning_hint?.trim() || null); }
-
-    setClauses.push('updated_at = CURRENT_TIMESTAMP'); // Add updated_at timestamp
-
-    if (setClauses.length > 1) { // Check if there's anything to update besides updated_at
-      const updateRewardSql = `UPDATE Rewards SET ${setClauses.join(', ')} WHERE reward_id = ?`;
-      await connection.query(updateRewardSql, [...values, id]);
-      console.log(`Updated reward ${id} with fields:`, setClauses.join(', '));
-    }
-
-    // 2. Handle free_menu_item_ids update in the linking table
-    if (free_menu_item_ids !== undefined) { // Only update if free_menu_item_ids was provided
-      // Delete existing entries for this reward
+    // Handle free menu items if provided
+    if (updateData.free_menu_item_ids && Array.isArray(updateData.free_menu_item_ids)) {
+      // First delete existing associations
       await connection.query('DELETE FROM reward_freemenuitems WHERE reward_id = ?', [id]);
-      console.log(`Deleted existing free menu items for reward ${id}`);
 
-      // Insert new entries if the array is not empty and contains valid IDs
-      if (Array.isArray(free_menu_item_ids) && free_menu_item_ids.length > 0) {
-        // Filter out any null, undefined, or empty string productIds
-        const validFreeMenuItemIds = free_menu_item_ids.filter(productId => 
-          productId !== null && productId !== undefined && productId !== '');
+      // Add new associations if there are any
+      if (updateData.free_menu_item_ids.length > 0) {
+        const freeMenuItemInserts = updateData.free_menu_item_ids
+          .filter(Boolean) // Filter out any null/undefined/empty values
+          .map(productId => [id, productId]);
 
-        if (validFreeMenuItemIds.length > 0) {
-          // Verify all product IDs exist before inserting
-          const [existingProducts] = await connection.query(
-            'SELECT product_id FROM Products WHERE product_id IN (?)',
-            [validFreeMenuItemIds]
+        if (freeMenuItemInserts.length > 0) {
+          await connection.query(
+            'INSERT INTO reward_freemenuitems (reward_id, product_id) VALUES ?',
+            [freeMenuItemInserts]
           );
-
-          const existingIds = new Set(existingProducts.map(p => p.product_id));
-          const invalidIds = validFreeMenuItemIds.filter(id => !existingIds.has(id));
-
-          if (invalidIds.length > 0) {
-            console.warn(`Some product IDs do not exist in database: ${invalidIds.join(', ')}`);
-          }
-
-          // Insert only valid IDs
-          const validIds = validFreeMenuItemIds.filter(id => existingIds.has(id));
-          if (validIds.length > 0) {
-            const insertFreeItemsSql = 'INSERT INTO reward_freemenuitems (reward_id, product_id) VALUES ?';
-            const freeItemValues = validIds.map(productId => [id, productId]);
-            await connection.query(insertFreeItemsSql, [freeItemValues]);
-            console.log(`Inserted ${freeItemValues.length} free menu items for reward ${id}`);
-          }
         }
       }
     }
 
-    // Delete the old image if a new one was provided and the old one exists
-    if (imageUrl !== undefined && imageUrl !== currentImage && currentImage && 
-        currentImage.includes('/uploads/') && !currentImage.includes('/src/assets/')) {
-      // Delete the old image file if in uploads directory
-      try {
-        await deleteUnusedImage(currentImage);
-      } catch (deleteError) {
-        console.error(`Failed to delete old image ${currentImage}:`, deleteError);
-        // Continue processing, this is not fatal
-      }
+    // If we updated the image and old image exists, delete old image
+    if (updateData.image_url && oldImageUrl && updateData.image_url !== oldImageUrl) {
+      await deleteUnusedImage(oldImageUrl);
     }
 
-    // 3. Commit transaction
+    // Commit transaction
     await connection.commit();
 
-    // 4. Fetch the updated reward (including free menu items)
-    const [updatedRewardRows] = await db.query('SELECT * FROM Rewards WHERE reward_id = ?', [id]);
-    const updatedRewardData = updatedRewardRows[0];
+    // Fetch updated reward including free menu items
+    const sql = `
+      SELECT 
+        r.*,
+        GROUP_CONCAT(rfmi.product_id) AS free_menu_item_ids
+      FROM Rewards r
+      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
+      WHERE r.reward_id = ?
+      GROUP BY r.reward_id
+    `;
+    const [updatedRows] = await connection.query(sql, [id]);
+    
+    if (updatedRows.length === 0) {
+      return res.status(404).json({ message: 'Reward not found after update.' });
+    }
 
-    // Fetch associated free menu items from the linking table
-    const [freeItemsRows] = await db.query(
-      'SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?',
-      [id]
-    );
-    const fetchedFreeMenuItemIds = freeItemsRows.map(row => row.product_id);
-
-    // Construct response with both camelCase and snake_case fields
+    const updatedReward = updatedRows[0];
+    
+    // Process for response format
     const responseReward = {
-      id: updatedRewardData.reward_id,
-      reward_id: updatedRewardData.reward_id,
-      name: updatedRewardData.name,
-      description: updatedRewardData.description,
-      image: updatedRewardData.image_url,
-      image_url: updatedRewardData.image_url,
-      type: updatedRewardData.type,
-      // Parse criteria JSON for the response
-      criteria: updatedRewardData.criteria_json ? safeJsonParse(updatedRewardData.criteria_json) : null,
-      criteria_json: updatedRewardData.criteria_json,
-      // Include numeric fields with proper type conversion
-      pointsCost: updatedRewardData.points_cost !== null ? parseFloat(updatedRewardData.points_cost) : null,
-      points_cost: updatedRewardData.points_cost !== null ? parseFloat(updatedRewardData.points_cost) : null,
-      // Include the fetched free menu items
-      freeMenuItemIds: fetchedFreeMenuItemIds,
-      free_menu_item_ids: fetchedFreeMenuItemIds,
-      // Include discount fields
-      discountPercentage: updatedRewardData.discount_percentage !== null ? parseFloat(updatedRewardData.discount_percentage) : null,
-      discount_percentage: updatedRewardData.discount_percentage !== null ? parseFloat(updatedRewardData.discount_percentage) : null,
-      discountFixedAmount: updatedRewardData.discount_fixed_amount !== null ? parseFloat(updatedRewardData.discount_fixed_amount) : null,
-      discount_fixed_amount: updatedRewardData.discount_fixed_amount !== null ? parseFloat(updatedRewardData.discount_fixed_amount) : null,
-      // Include string fields
-      earningHint: updatedRewardData.earning_hint,
-      earning_hint: updatedRewardData.earning_hint,
-      // Include timestamps
-      createdAt: updatedRewardData.created_at,
-      updatedAt: updatedRewardData.updated_at
+      id: updatedReward.reward_id,
+      reward_id: updatedReward.reward_id,
+      name: updatedReward.name,
+      description: updatedReward.description,
+      image: updatedReward.image_url,
+      image_url: updatedReward.image_url,
+      type: updatedReward.type,
+      criteria: updatedReward.criteria_json ? safeJsonParse(updatedReward.criteria_json) : null,
+      criteria_json: updatedReward.criteria_json,
+      pointsCost: updatedReward.points_cost !== null ? parseFloat(updatedReward.points_cost) : null,
+      points_cost: updatedReward.points_cost !== null ? parseFloat(updatedReward.points_cost) : null,
+      freeMenuItemIds: updatedReward.free_menu_item_ids ? updatedReward.free_menu_item_ids.split(',') : [],
+      free_menu_item_ids: updatedReward.free_menu_item_ids ? updatedReward.free_menu_item_ids.split(',') : [],
+      discountPercentage: updatedReward.discount_percentage !== null ? parseFloat(updatedReward.discount_percentage) : null,
+      discount_percentage: updatedReward.discount_percentage !== null ? parseFloat(updatedReward.discount_percentage) : null,
+      discountFixedAmount: updatedReward.discount_fixed_amount !== null ? parseFloat(updatedReward.discount_fixed_amount) : null,
+      discount_fixed_amount: updatedReward.discount_fixed_amount !== null ? parseFloat(updatedReward.discount_fixed_amount) : null,
+      earningHint: updatedReward.earning_hint,
+      earning_hint: updatedReward.earning_hint,
+      createdAt: updatedReward.created_at,
+      updatedAt: updatedReward.updated_at
     };
 
     res.json(responseReward);
+
   } catch (error) {
     if (connection) {
       await connection.rollback();
@@ -3526,53 +3604,7 @@ app.put('/api/users/:id', authenticateToken, (req, res, next) => {
     }
 });
 
-// Update reward image endpoint
-app.put('/api/rewards/definitions/:id', authenticateToken, upload.single('image'), async (req, res) => {
-    if (req.user.role !== 'manager') {
-        return res.status(403).json({ message: 'Forbidden: Only managers can update reward definitions.' });
-    }
-
-    const { id } = req.params;
-    const updateData = req.body;
-    let connection;
-
-    try {
-        connection = await db.getConnection();
-        await connection.beginTransaction();
-
-        // If new file uploaded, get its URL
-        if (req.file) {
-            updateData.image_url = getUploadedFileUrl(req.file);
-        }
-
-        // Get current reward data to check for existing image
-        const [currentReward] = await connection.query('SELECT image_url FROM Rewards WHERE reward_id = ?', [id]);
-
-        // Update reward data
-        await connection.query('UPDATE Rewards SET ? WHERE reward_id = ?', [updateData, id]);
-
-        // If update successful and old image exists, delete it
-        if (currentReward[0]?.image_url) {
-            await deleteUnusedImage(currentReward[0].image_url);
-        }
-
-        await connection.commit();
-
-        // Fetch and return updated reward data
-        const [updatedReward] = await connection.query('SELECT * FROM Rewards WHERE reward_id = ?', [id]);
-        res.json(updatedReward[0]);
-    } catch (err) {
-        if (connection) {
-            await connection.rollback();
-        }
-        console.error('Error updating reward:', err);
-        res.status(500).json({ message: 'Error updating reward', error: err.message });
-    } finally {
-        if (connection) {
-            connection.release();
-        }
-    }
-});
+// Note: The previous reward image update endpoint has been merged with the main reward update endpoint above
 
 // Update category image endpoint
 app.put('/api/categories/:id', authenticateToken, upload.single('image'), async (req, res) => {
@@ -3826,11 +3858,14 @@ app.get('/api/rewards/available/:customerId', authenticateToken, async (req, res
 
 // GET /api/rewards/available - Get all available rewards for a customer
 app.get('/api/rewards/available', authenticateToken, async (req, res) => {
-  const customerId = req.user.internalId; // Use internalId instead of userId to match with customer_id in database
+  // First try to get customer ID from internalId, then fall back to userId
+  const customerId = req.user.internalId || String(req.user.userId);
   if (!customerId) {
     // This should ideally be caught by authenticateToken if userId is essential
     return res.status(400).json({ message: "Customer ID not found in token." });
   }
+  console.log(`[GET /api/rewards/available] Using customer ID: ${customerId} from token:`, req.user);
+  
   let connection;
 
   try {
@@ -4794,7 +4829,12 @@ app.post('/api/orders/checkout', authenticateToken, async (req, res) => {
     const finalTotal = Math.max(0, orderTotal - discountTotal);
 
     // Ensure all parameters for order creation are valid
-    const customerId = req.user && req.user.role === 'customer' ? (req.user.internalId || null) : null;
+    const customerId = req.user && req.user.role === 'customer' 
+        ? (req.user.internalId || req.user.userId || null) 
+        : null;
+    
+    console.log(`[/api/orders/checkout] Setting customer_id: ${customerId}, from req.user:`, req.user);
+    
     const customerName = orderData.customerName || 'Guest';
     
     if (!orderId || typeof orderId !== 'string') {
@@ -4969,6 +5009,8 @@ app.post('/api/orders/checkout', authenticateToken, async (req, res) => {
     res.status(200).json({ 
       message: 'Order submitted for approval',
       orderId,
+      ticketNumber,
+      timestamp: new Date().toISOString(),
       approvalUrl
     });
     
@@ -5163,3 +5205,72 @@ app.get('/api/rewards/customer/:id/claimed', authenticateToken, async (req, res)
 
 // --- Helper functions for image handling
 // ... existing code ...
+
+// GET /api/users/:userId/settings - Get user settings
+app.get('/api/users/:userId/settings', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  
+  // Authorization check: User can only access their own settings, unless they are a manager
+  if (req.user.userId != userId && req.user.role !== 'manager') {
+    return res.status(403).json({ 
+      message: 'Forbidden: You can only access your own settings.' 
+    });
+  }
+  
+  try {
+    // Get user settings from database
+    const [settings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
+    
+    if (settings.length === 0) {
+      // If no settings found, return default settings
+      return res.json({
+        autoSave: false,
+        theme: 'light',
+        profileBanner: {
+          type: 'color',
+          value: '#a7f3d0',
+        }
+      });
+    }
+    
+    // Parse settings JSON and return
+    const userSettings = safeJsonParse(settings[0].settings_json);
+    res.json(userSettings);
+  } catch (error) {
+    console.error(`Error fetching settings for user ${userId}:`, error);
+    res.status(500).json({ message: 'Error fetching user settings', error: error.message });
+  }
+});
+
+// PUT /api/users/:userId/settings - Update user settings
+app.put('/api/users/:userId/settings', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const newSettings = req.body;
+  
+  // Authorization check: User can only update their own settings, unless they are a manager
+  if (req.user.userId != userId && req.user.role !== 'manager') {
+    return res.status(403).json({ 
+      message: 'Forbidden: You can only update your own settings.' 
+    });
+  }
+  
+  try {
+    // Check if settings exist for user
+    const [existingSettings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
+    
+    const settingsJson = JSON.stringify(newSettings);
+    
+    if (existingSettings.length === 0) {
+      // Insert new settings
+      await db.query('INSERT INTO usersettings (user_id, settings_json) VALUES (?, ?)', [userId, settingsJson]);
+    } else {
+      // Update existing settings
+      await db.query('UPDATE usersettings SET settings_json = ? WHERE user_id = ?', [settingsJson, userId]);
+    }
+    
+    res.json({ message: 'Settings updated successfully', settings: newSettings });
+  } catch (error) {
+    console.error(`Error updating settings for user ${userId}:`, error);
+    res.status(500).json({ message: 'Error updating user settings', error: error.message });
+  }
+});

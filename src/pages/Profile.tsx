@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User } from '../types'; // Import User type
+import { User, SettingsData } from '../types'; // Import SettingsData
 import ImageUpload from '../components/ImageUpload';
 import { uploadImage } from '../utils/imageUpload';
 
@@ -36,6 +36,9 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
   const [error, setError] = useState<string | null>(null); // New state for errors
   // New state for fetching data
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Add state for user settings
+  const [userSettings, setUserSettings] = useState<SettingsData | null>(null);
 
   // Effect to fetch full user data when the component mounts or user.id changes
   useEffect(() => {
@@ -118,6 +121,43 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
     };
   }, [editFormData.avatar]);
 
+  // Add useEffect to fetch user settings
+  useEffect(() => {
+    if (user?.internalId) {
+      fetchUserSettings();
+    }
+  }, [user?.internalId]);
+  
+  const fetchUserSettings = async () => {
+    if (!user?.internalId) return;
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        console.log('[Profile.tsx] No auth token found for settings fetch.');
+        return;
+      }
+      
+      const response = await fetch(`http://localhost:3001/api/users/${user.internalId}/settings`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) {
+        console.error('[Profile.tsx] Error fetching user settings:', response.status);
+        return;
+      }
+      
+      const settings = await response.json();
+      console.log('[Profile.tsx] Fetched user settings:', settings);
+      setUserSettings(settings);
+    } catch (error) {
+      console.error('[Profile.tsx] Error in fetchUserSettings:', error);
+    }
+  };
+
   const handleImageChange = async (file: File | null, previewUrl: string) => {
     if (!user?.internalId) return;
 
@@ -197,43 +237,54 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
 
   const handleSaveClick = async (e: React.FormEvent) => {
       e.preventDefault();
-      // Explicitly check if user and user.id are valid before proceeding
-      if (!user || !user.internalId) {
-          console.error("Attempted to save profile with invalid user or user internalId.", user);
-          setError("User information is missing or invalid. Please try logging out and back in.");
-          return; // Stop the save process
+      
+      if (!user?.internalId) {
+          alert("You must be logged in to update your profile.");
+          return;
       }
-
-      setIsSaving(true); // Start loading state
-      setError(null); // Clear previous errors
-
-      // Prepare the data to send to the backend
-      const dataToSave: { name: string; avatar_url?: string | null; phone_number?: string | null; address?: string | null } = {
-          name: editFormData.name.trim(),
-          phone_number: editFormData.phone_number?.trim() || null,
-          address: editFormData.address?.trim() || null,
-      };
-
-      // Handle avatar data
-      if (typeof editFormData.avatar === 'string' && !editFormData.avatar.startsWith('blob:')) {
-          // Send existing string URL that's not a blob
+      
+      console.log('[Profile.tsx] handleSaveClick: Starting save.', editFormData);
+      
+      setIsSaving(true);
+      setError(null);
+      
+      // Validate form data here (this could be expanded as needed)
+      if (!editFormData.name.trim()) {
+          setError("Name is required.");
+          setIsSaving(false);
+          return;
+      }
+      
+      // Create data object with only the fields we want to update
+      const dataToSave: any = {};
+      
+      // Only include fields that we allow to be updated
+      if (editFormData.name && editFormData.name !== user.name) {
+          dataToSave.name = editFormData.name;
+      }
+      
+      if (editFormData.phone_number !== undefined && editFormData.phone_number !== user.phone_number) {
+          dataToSave.phone_number = editFormData.phone_number;
+      }
+      
+      if (editFormData.address !== undefined && editFormData.address !== user.address) {
+          dataToSave.address = editFormData.address;
+      }
+      
+      if (editFormData.avatar && editFormData.avatar !== user.avatar) {
           dataToSave.avatar_url = editFormData.avatar;
-      } else if (editFormData.avatarFile) {
-          // Upload new file and get URL to save
-          try {
-              console.log("[Profile.tsx] Uploading new avatar file");
-              const avatarUrl = await uploadImage(editFormData.avatarFile);
-              dataToSave.avatar_url = avatarUrl;
-              console.log("[Profile.tsx] Avatar uploaded, URL:", avatarUrl);
-          } catch (uploadError: any) {
-              console.error("[Profile.tsx] Avatar upload error:", uploadError);
-              setError(`Error uploading avatar: ${uploadError.message}`);
-              setIsSaving(false);
-              return;
-          }
+      }
+      
+      // If no data to save, exit
+      if (Object.keys(dataToSave).length === 0) {
+          console.log('[Profile.tsx] No changes detected. Exiting save.');
+          alert('No changes detected.');
+          setIsEditing(false);
+          setIsSaving(false);
+          return;
       }
 
-      console.log("[Profile.tsx] Saving profile data:", dataToSave);
+      console.log('[Profile.tsx] Saving profile data:', dataToSave);
 
       try {
           // Get auth token from localStorage
@@ -276,7 +327,9 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
               updateUser({
                   ...user,
                   name: updatedData.name || user.name,
-                  avatar: updatedData.avatar || user.avatar
+                  avatar: updatedData.avatar || user.avatar,
+                  phone_number: updatedData.phone_number || user.phone_number,
+                  address: updatedData.address || user.address
               });
           }
           
@@ -285,158 +338,212 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
           setIsEditing(false); // Exit edit mode
       } catch (error: any) {
           console.error("[Profile.tsx] Error saving profile:", error);
-          setError(`Error saving profile: ${error.message}`);
+          setError(error.message || "An error occurred while saving your profile.");
       } finally {
           setIsSaving(false);
       }
   };
-  
-  // Helper to get a display-friendly role name
+
   const getDisplayRole = (role: string | undefined) => {
-    if (!role) return 'Guest';
-    return role.charAt(0).toUpperCase() + role.slice(1);
+      if (!role) return 'Customer';
+      
+      // Capitalize first letter of role
+      return role.charAt(0).toUpperCase() + role.slice(1);
   };
 
-  if (!user) {
-    console.log('[Profile.tsx] Rendering: User prop is null.');
-    return <div className="p-6">Please log in to view your profile.</div>; // Or redirect
-  }
+  // Function to render the profile banner based on settings
+  const renderProfileBanner = () => {
+    // Default banner styling
+    const defaultBannerStyle = {
+      backgroundColor: '#a7f3d0', // Default emerald color
+      height: '160px'
+    };
+    
+    // If no settings, use default
+    if (!userSettings) {
+      return <div style={defaultBannerStyle} className="w-full"></div>;
+    }
+    
+    // Use settings to create banner
+    if (userSettings.profileBanner.type === 'color') {
+      return (
+        <div 
+          style={{ 
+            backgroundColor: userSettings.profileBanner.value || defaultBannerStyle.backgroundColor,
+            height: '160px'
+          }} 
+          className="w-full"
+        ></div>
+      );
+    } else if (userSettings.profileBanner.type === 'image' && userSettings.profileBanner.value) {
+      // For server-side images, make sure to use the full URL with the server base
+      const imageUrl = userSettings.profileBanner.value.startsWith('http') 
+        ? userSettings.profileBanner.value 
+        : `http://localhost:3001${userSettings.profileBanner.value}`;
+        
+      return (
+        <div 
+          style={{ 
+            backgroundImage: `url(${imageUrl})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            height: '160px'
+          }} 
+          className="w-full"
+        ></div>
+      );
+    }
+    
+    // Fallback to default
+    return <div style={defaultBannerStyle} className="w-full"></div>;
+  };
 
-  // Show loading state while fetching initial data
+  // During the initial loading state
   if (isLoading) {
-    console.log('[Profile.tsx] Rendering: isLoading is true.');
-    return <div className="p-6 text-center text-gray-500">Loading profile...</div>;
+    console.log('[Profile.tsx] Rendering: Loading state.');
+    return (
+      <div className="max-w-4xl mx-auto p-8 text-center">
+        <p className="text-gray-500">Loading profile...</p>
+      </div>
+    );
   }
 
-  // Show error state if fetching failed
-  if (error && !isLoading) {
-    console.log('[Profile.tsx] Rendering: Error is present and isLoading is false.', error);
-    return <div className="p-6 text-center text-red-500">Error loading profile: {error}</div>;
+  // Error fallback if we failed to fetch user data, but show it only if we didn't set form data as a fallback
+  if (error && (!editFormData.name || editFormData.name === '')) {
+    console.log('[Profile.tsx] Rendering: Error state.', error);
+    return (
+      <div className="max-w-4xl mx-auto p-8">
+        <div className="bg-red-50 p-4 rounded-lg border border-red-200 text-red-700">
+          <h3 className="text-lg font-medium mb-2">Error</h3>
+          <p>{error}</p>
+        </div>
+      </div>
+    );
   }
 
   console.log('[Profile.tsx] Rendering: Profile data loaded successfully.', user, editFormData);
   return (
     <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
-       <div className="bg-emerald-200 p-6 flex items-center space-x-6 relative">
-            <div className="relative w-24 h-24">
-                <ImageUpload
-                    currentImageUrl={isEditing ? editFormData.avatar : (user?.avatar ?? "/src/assets/avatar.png")}
-                    defaultImageUrl="/src/assets/avatar.png"
-                    onImageChange={handleImageChange}
-                    disabled={isSaving}
-                    className="w-24 h-24"
-                />
+      {/* Profile Banner based on settings */}
+      <div className="relative">
+        {renderProfileBanner()}
+        
+        {/* Profile Info Overlay */}
+        <div className="absolute bottom-0 left-0 right-0 p-6 flex items-center space-x-6 bg-gradient-to-t from-black/40 to-transparent">
+          <div className="relative z-10">
+            <ImageUpload
+              currentImageUrl={isEditing ? editFormData.avatar : (user?.avatar ?? "/src/assets/avatar.png")}
+              defaultImageUrl="/src/assets/avatar.png"
+              onImageChange={handleImageChange}
+              disabled={isSaving}
+              className="w-24 h-24 border-4 border-white shadow-md"
+            />
+          </div>
+          <div className="z-10">
+            <h2 className="text-2xl font-semibold text-white shadow-sm">{isEditing ? editFormData.name : user?.name}</h2>
+            <p className="text-white/80 text-sm">{user?.email}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-8 p-6">
+        <div className="bg-white p-6 rounded-2xl shadow border border-gray-100">
+          <form onSubmit={handleSaveClick}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold text-brown-800">Profile Information</h3>
+              {!isEditing && (
+                <button 
+                  onClick={handleEditClick}
+                  type="button"
+                  className="quick-action-button flex items-center gap-1.5"
+                  disabled={isSaving}
+                >
+                  <img src="/src/assets/edit.svg" alt="" className="w-3.5 h-3.5"/> Edit Profile
+                </button>
+              )}
             </div>
-            <div>
-                <h2 className="text-2xl font-semibold text-white">{isEditing ? editFormData.name : user.name}</h2>
-                {/* Display user ID or a placeholder for customer ID */}
-                <p className="text-brown-200 text-sm">{user.internalId}</p> 
+            
+            {/* Display Error Message */}
+            {error && (
+              <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-800 rounded-md text-sm">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormGroup label="Full Name">
+                  {isEditing ? (
+                     <input type="text" name="name" value={editFormData.name} onChange={handleInputChange} className="form-input" required disabled={isSaving} />
+                  ) : (
+                     <p className="profile-text">{user?.name}</p>
+                  )}
+                </FormGroup>
+                <FormGroup label="Email Address">
+                  {/* Email (user.id) is typically not editable directly through profile edit */}
+                  <p className="profile-text text-gray-500">{user?.email ?? 'N/A'}</p>{/* Display user.id (which should be the email) */}
+                </FormGroup>
+                <FormGroup label="Phone Number">
+                  {isEditing ? (
+                     <input type="tel" name="phone_number" value={editFormData.phone_number || ''} onChange={handleInputChange} className="form-input" disabled={isSaving} />
+                  ) : (
+                     <p className="profile-text">{isEditing ? editFormData.phone_number : user?.phone_number || 'N/A'}</p>
+                  )}
+                </FormGroup>
+                 <FormGroup label="Role">
+                  <p className="profile-text text-gray-500">{getDisplayRole(user?.role)}</p>
+                </FormGroup>
+                <FormGroup label="Your Referral Code">
+                  {user?.referralCode ? (
+                    <div className="flex items-center space-x-2">
+                      <p className="profile-text font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-md">{user.referralCode}</p>
+                      <button 
+                         type="button"
+                         onClick={() => navigator.clipboard.writeText(user.referralCode || '')}
+                         className="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 py-1 rounded-md transition-colors"
+                         disabled={isSaving}
+                       >
+                         Copy
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="profile-text text-gray-500">N/A</p>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">Share this code with friends!</p>
+                </FormGroup>
+                {/* Address can be multi-line */}
+                <FormGroup label="Address" className="md:col-span-2">
+                  {isEditing ? (
+                      <textarea name="address" value={editFormData.address} onChange={handleInputChange} className="form-input min-h-[60px]" disabled={isSaving} />
+                  ) : (
+                      <p className="profile-text">{isEditing ? editFormData.address : user?.address || 'N/A'}</p>
+                  )}
+                </FormGroup>
+              </div>
+
+              {isEditing && (
+                  <div className="pt-4 border-t border-gray-100 flex space-x-3 justify-end">
+                     <button type="button" onClick={handleCancelClick} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors" disabled={isSaving}>
+                        Cancel
+                     </button>
+                     <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors" disabled={isSaving || !editFormData.name.trim()}>
+                        {isSaving ? 'Saving...' : 'Save Changes'}
+                     </button>
+                  </div>
+              )}
             </div>
-       </div>
-
-       <div className="grid grid-cols-1 gap-8">
-           <div className="bg-white p-6 rounded-2xl shadow border border-gray-100">
-               <form onSubmit={handleSaveClick}>
-                   <div className="flex justify-between items-center mb-4">
-                      <h3 className="text-xl font-semibold text-brown-800">Profile Information</h3>
-                      {!isEditing && (
-                          <button 
-                              onClick={handleEditClick}
-                              type="button" // Added type button
-                              className="quick-action-button flex items-center gap-1.5"
-                              disabled={isSaving}
-                          >
-                             <img src="/src/assets/edit.svg" alt="" className="w-3.5 h-3.5"/> Edit Profile
-                          </button>
-                      )}
-                   </div>
-                   
-                   {/* Display Error Message */}
-                   {error && (
-                       <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-800 rounded-md text-sm">
-                           {error}
-                       </div>
-                   )}
-
-                   <div className="space-y-4">
-                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                           <FormGroup label="Full Name">
-                               {isEditing ? (
-                                  <input type="text" name="name" value={editFormData.name} onChange={handleInputChange} className="form-input" required disabled={isSaving} />
-                               ) : (
-                                  <p className="profile-text">{user.name}</p>
-                               )}
-                           </FormGroup>
-                           <FormGroup label="Email Address">
-                               {/* Email (user.id) is typically not editable directly through profile edit */}
-                               <p className="profile-text text-gray-500">{user.email ?? 'N/A'}</p>{/* Display user.id (which should be the email) */}
-                           </FormGroup>
-                           <FormGroup label="Phone Number">
-                               {isEditing ? (
-                                  <input type="tel" name="phone_number" value={editFormData.phone_number || ''} onChange={handleInputChange} className="form-input" disabled={isSaving} />
-                               ) : (
-                                  <p className="profile-text">{user.phone_number || 'N/A'}</p> // Display phone_number from user
-                               )}
-                           </FormGroup>
-                            <FormGroup label="Role">
-                               <p className="profile-text text-gray-500">{getDisplayRole(user.role)}</p>
-                           </FormGroup>
-                           <FormGroup label="Your Referral Code">
-                               {user.referralCode ? (
-                                 <div className="flex items-center space-x-2">
-                                   <p className="profile-text font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-md">{user.referralCode}</p>
-                                   <button 
-                                      type="button"
-                                      onClick={() => navigator.clipboard.writeText(user.referralCode || '')}
-                                      className="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 py-1 rounded-md transition-colors"
-                                      disabled={isSaving}
-                                    >
-                                      Copy
-                                   </button>
-                                 </div>
-                               ) : (
-                                 <p className="profile-text text-gray-500">N/A</p>
-                               )}
-                               <p className="text-xs text-gray-500 mt-1">Share this code with friends!</p>
-                           </FormGroup>
-                           {/* Address can be multi-line */}
-                           <FormGroup label="Address" className="md:col-span-2">
-                               {isEditing ? (
-                                   <textarea name="address" value={editFormData.address} onChange={handleInputChange} className="form-input min-h-[60px]" disabled={isSaving} />
-                               ) : (
-                                   <p className="profile-text">{user.address || 'N/A'}</p> // Display address from user prop
-                               )}
-                           </FormGroup>
-                       </div>
-
-                       {isEditing && (
-                           <div className="pt-4 border-t border-gray-100 flex space-x-3 justify-end">
-                              <button type="button" onClick={handleCancelClick} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors" disabled={isSaving}>
-                                 Cancel
-                              </button>
-                              <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors" disabled={isSaving || !editFormData.name.trim()}>
-                                 {isSaving ? 'Saving...' : 'Save Changes'}
-                              </button>
-                           </div>
-                       )}
-                   </div>
-               </form>
-           </div>
-       </div>
+          </form>
+        </div>
+      </div>
     </div>
   );
 };
 
-// Hidden File Input for Avatar
-const HiddenAvatarInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>((props, ref) => (
-    <input type="file" accept="image/*" ref={ref} className="hidden" {...props} />
-));
-
 const FormGroup: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({ label, children, className }) => (
-    <div className={className}>
-        <label className="block text-sm font-medium text-gray-600 mb-1">{label}</label>
-        {children}
-    </div>
+  <div className={`form-group ${className || ''}`}>
+    <label className="block mb-1 text-sm font-medium text-gray-700">{label}</label>
+    {children}
+  </div>
 );
 
 export default Profile; 

@@ -659,29 +659,34 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       
       const processedData = rewardsArray.map((reward: any) => {
         try {
-          // Ensure each reward has the expected structure
+          // Create a standardized RawRewardItem from the received data
           const rawReward: RawRewardItem = {
-            reward_id: reward?.reward_id || reward?.id || '',
+            reward_id: reward?.reward_id || '',
             name: reward?.name || '',
             description: reward?.description || '',
-            image_url: reward?.image_url || reward?.image || '',
+            image_url: reward?.image_url || '',
             type: reward?.type || 'standard',
-            criteria_json: reward?.criteria_json || (reward?.criteria ? JSON.stringify(reward.criteria) : undefined),
-            points_cost: reward?.points_cost !== undefined ? reward.points_cost : reward?.pointsCost,
-            discount_percentage: reward?.discount_percentage !== undefined ? reward.discount_percentage : reward?.discountPercentage,
-            discount_fixed_amount: reward?.discount_fixed_amount !== undefined ? reward.discount_fixed_amount : reward?.discountFixedAmount,
-            earning_hint: reward?.earning_hint || reward?.earningHint,
-            free_menu_item_ids: reward?.free_menu_item_ids || reward?.freeMenuItemIds || [],
+            criteria_json: reward?.criteria_json || '',
+            points_cost: reward?.points_cost !== undefined ? Number(reward.points_cost) : undefined,
+            free_menu_item_ids: Array.isArray(reward?.free_menu_item_ids) 
+              ? reward.free_menu_item_ids 
+              : typeof reward?.free_menu_item_ids === 'string'
+                ? reward.free_menu_item_ids.split(',')
+                : [],
+            discount_percentage: reward?.discount_percentage !== undefined ? Number(reward.discount_percentage) : undefined,
+            discount_fixed_amount: reward?.discount_fixed_amount !== undefined ? Number(reward.discount_fixed_amount) : undefined,
+            earning_hint: reward?.earning_hint || '',
+            created_at: reward?.created_at,
+            updated_at: reward?.updated_at
           };
-          const processed = convertRawToProcessed(rawReward);
-          console.log("Processed reward:", processed);
-          return processed;
+          
+          return convertRawToProcessed(rawReward);
         } catch (error) {
           console.error("Error processing reward:", error, reward);
           // Return a minimal valid reward to prevent crashes
           return {
-            id: reward?.reward_id || reward?.id || `error-${Date.now()}`,
-            reward_id: reward?.reward_id || reward?.id || `error-${Date.now()}`,
+            id: reward?.reward_id || `error-${Date.now()}`,
+            reward_id: reward?.reward_id || `error-${Date.now()}`,
             name: reward?.name || 'Error: Invalid Reward',
             description: 'There was an error processing this reward',
             image: '/src/assets/rewards.png',
@@ -1126,6 +1131,19 @@ const EditRewards: React.FC<EditRewardsProps> = ({
     let imageUrl = reward.image_url || reward.image || '/src/assets/rewards.png';
     imageUrl = ensureFullImageUrl(imageUrl);
 
+    // Handle free menu items - ensure it's always an array
+    let freeMenuItems: string[] = [];
+    if (Array.isArray(reward.free_menu_item_ids)) {
+      freeMenuItems = reward.free_menu_item_ids.filter(Boolean);
+    } else if (Array.isArray(reward.freeMenuItemIds)) {
+      freeMenuItems = reward.freeMenuItemIds.filter(Boolean);
+    } else if (typeof reward.free_menu_item_ids === 'string') {
+      // Handle comma-separated string from GROUP_CONCAT
+      freeMenuItems = reward.free_menu_item_ids.split(',').filter(Boolean);
+    } else if (typeof reward.freeMenuItemIds === 'string') {
+      freeMenuItems = reward.freeMenuItemIds.split(',').filter(Boolean);
+    }
+
     // Convert to ProcessedRewardItem format with safe fallbacks for all fields
     const processed: ProcessedRewardItem = {
       id: rewardId,
@@ -1142,11 +1160,7 @@ const EditRewards: React.FC<EditRewardsProps> = ({
                          typeof reward.discountFixedAmount === 'number' ? reward.discountFixedAmount : undefined,
       earningHint: reward.earning_hint || reward.earningHint || '',
       criteria: parsedCriteria,
-      freeMenuItemIds: Array.isArray(reward.free_menu_item_ids) 
-        ? reward.free_menu_item_ids.filter(Boolean) 
-        : Array.isArray(reward.freeMenuItemIds) 
-          ? reward.freeMenuItemIds.filter(Boolean) 
-          : []
+      freeMenuItemIds: freeMenuItems
     };
 
     console.log("[convertRawToProcessed] Processed reward:", processed);
@@ -1198,8 +1212,14 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
-        throw new Error(errorData.message || `Failed to add reward. Status: ${response.status}`);
+        let errorMessage = `Failed to add reward. Status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (e) {
+          // If not JSON, use the default error message
+        }
+        throw new Error(errorMessage);
       }
 
       const newReward = await response.json();
@@ -1285,8 +1305,14 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to update reward. Status: ${response.status}`);
+        let errorMessage = `Failed to update reward. Status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (e) {
+          // If not JSON, use the default error message
+        }
+        throw new Error(errorMessage);
       }
 
       const updatedReward = await response.json();
@@ -1309,47 +1335,53 @@ const EditRewards: React.FC<EditRewardsProps> = ({
   };
   
   const handleDeleteReward = async (rewardId: string) => {
-      if (!window.confirm('Are you sure you want to delete this reward definition? This cannot be undone.')) {
-          return;
+    if (!window.confirm('Are you sure you want to delete this reward definition? This cannot be undone.')) {
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error("Authentication token missing.");
       }
-      setIsLoading(true);
-      setError(null);
+
+      const response = await fetch(`http://localhost:3001/api/rewards/definitions/${rewardId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to delete reward. Status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (e) {
+          // If not JSON, use the default error message
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Remove from state
+      setRewardDefinitions(prev => prev.filter(r => r.reward_id !== rewardId));
       
-      try {
-          const token = localStorage.getItem('authToken');
-          if (!token) {
-              throw new Error("Authentication token missing.");
-          }
-
-          const response = await fetch(`http://localhost:3001/api/rewards/definitions/${rewardId}`, {
-              method: 'DELETE',
-              headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json'
-              }
-          });
-
-          if (!response.ok) {
-              const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
-              throw new Error(errorData.message || `Failed to delete reward. Status: ${response.status}`);
-          }
-
-          // Remove from state
-          setRewardDefinitions(prev => prev.filter(r => r.reward_id !== rewardId));
-          
-          // Clear form if we were editing this reward
-          if (editingRewardId === rewardId) {
-              resetFormAndEditingState();
-          }
-          
-          alert('Reward deleted successfully!');
-
-      } catch (err: any) {
-          console.error("Error deleting reward:", err);
-          setError(err.message || 'An unknown error occurred while deleting the reward.');
-      } finally {
-          setIsLoading(false);
+      // Clear form if we were editing this reward
+      if (editingRewardId === rewardId) {
+        resetFormAndEditingState();
       }
+      
+      alert('Reward deleted successfully!');
+
+    } catch (err: any) {
+      console.error("Error deleting reward:", err);
+      setError(err.message || 'An unknown error occurred while deleting the reward.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleGrantVoucher = () => {

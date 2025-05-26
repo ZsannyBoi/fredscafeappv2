@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Product, OptionCategory, OrderItem as CartItem, User, ProductOption, NewOrderData, OrderItem, PlacedOrderItemDetail, RedeemedReward } from '../types'; // Added OrderItem for clarity
+import { Product, OptionCategory, OrderItem as CartItem, User, ProductOption, NewOrderData, OrderItem, PlacedOrderItemDetail, RedeemedReward, OrderResponse } from '../types'; // Added OrderResponse
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -46,7 +46,7 @@ interface RequiredOptionErrors {
 }
 
 interface MenuPageProps {
-  placeNewOrder: (orderData: NewOrderData) => void;
+  placeNewOrder: (orderData: NewOrderData) => Promise<OrderResponse>;
   user: User | null; // Add user prop
 }
 
@@ -77,6 +77,16 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
   const [discountAmount, setDiscountAmount] = useState(0);
   const [rewardsLoading, setRewardsLoading] = useState(false);
   const [rewardsError, setRewardsError] = useState<string | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [lastOrderDetails, setLastOrderDetails] = useState<{
+    orderId: string;
+    timestamp: string;
+    ticketNumber: string;
+    items: PlacedOrderItemDetail[];
+    total: number;
+    discountAmount: number;
+    subtotal: number;
+  } | null>(null);
 
   // Make sure this is set correctly - add debugging console log
   const isLoggedIn = !!user;
@@ -483,8 +493,15 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
             }))
         ];
         
+        // Filter out any rewards that were redeemed in previous sessions (stored in localStorage)
+        const filteredRewards = combinedRewards.filter(reward => {
+            const key = `redeemed_reward_${reward.id}${reward.instanceId ? '_' + reward.instanceId : ''}`;
+            return localStorage.getItem(key) !== 'true';
+        });
+        
         console.log('[fetchCustomerRewards] Combined rewards:', combinedRewards);
-        setAvailableRewards(combinedRewards);
+        console.log('[fetchCustomerRewards] Filtered rewards after redemption check:', filteredRewards);
+        setAvailableRewards(filteredRewards);
         
         // Check for newly redeemed rewards
         const newlyRedeemedRewards = combinedRewards.filter(r => r.isNewlyRedeemed);
@@ -530,8 +547,14 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     if (isRemoving) {
         toast.info(`Removed: ${reward.name}`);
     } else {
-        if (reward.discountPercentage) {
-            toast.success(`Applied: ${reward.discountPercentage}% discount`);
+        if (reward.discountPercentage && reward.discountPercentage > 0) {
+            // Calculate the actual discount amount for the notification
+            const currentOrderTotal = orderItems
+              .filter(item => !item.isRewardItem)
+              .reduce((sum, item) => sum + (item.itemTotalPrice * item.quantity), 0);
+            const discountAmount = currentOrderTotal * (reward.discountPercentage / 100);
+            
+            toast.success(`Applied: ${reward.discountPercentage}% discount ($${discountAmount.toFixed(2)} off)`);
         } else if (reward.discountFixedAmount) {
             toast.success(`Applied: $${reward.discountFixedAmount.toFixed(2)} off your order`);
         } else if (reward.freeMenuItemIds && reward.freeMenuItemIds.length > 0) {
@@ -545,11 +568,11 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     }
     
     // Calculate the new discount amount based on the updated rewards list
-    recalculateDiscount( 
-        isRemoving
-            ? selectedRewards.filter(r => !(r.id === reward.id && r.instanceId === reward.instanceId))
-            : [...selectedRewards, reward]
-    );
+    const updatedRewards = isRemoving
+        ? selectedRewards.filter(r => !(r.id === reward.id && r.instanceId === reward.instanceId))
+        : [...selectedRewards, reward];
+        
+    recalculateDiscount(updatedRewards);
     
     // Handle free items immediately (will be called again in useEffect)
     if (!isRemoving && reward.freeMenuItemIds && reward.freeMenuItemIds.length > 0) {
@@ -588,14 +611,19 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     // Calculate discounts
     rewards.forEach(reward => {
         if (reward.discountPercentage && reward.discountPercentage > 0) {
-            currentTotalDiscount += currentOrderTotal * (reward.discountPercentage / 100);
+            const percentageDiscount = currentOrderTotal * (reward.discountPercentage / 100);
+            console.log(`Applying discount: ${reward.discountPercentage}% = $${percentageDiscount.toFixed(2)}`);
+            currentTotalDiscount += percentageDiscount;
         } else if (reward.discountFixedAmount && reward.discountFixedAmount > 0) {
+            console.log(`Applying fixed discount: $${reward.discountFixedAmount.toFixed(2)}`);
             currentTotalDiscount += reward.discountFixedAmount;
         }
     });
     
     // Cap discount at order total
-    setDiscountAmount(Math.min(currentTotalDiscount, currentOrderTotal));
+    const finalDiscount = Math.min(currentTotalDiscount, currentOrderTotal);
+    console.log(`Total discount: $${finalDiscount.toFixed(2)} (from $${currentTotalDiscount.toFixed(2)})`);
+    setDiscountAmount(finalDiscount);
    };
 
    const addFreeItemsToCart = () => {
@@ -634,8 +662,15 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
 
    useEffect(() => {
     addFreeItemsToCart();
-    recalculateDiscount(); // Recalculate discount whenever selectedRewards or orderItems change
-   }, [selectedRewards, products]); // Rerun when selected rewards or products list (for finding item details) changes
+    recalculateDiscount(); // Recalculate discount whenever selectedRewards or products change
+   }, [selectedRewards, products]);
+
+   // Recalculate discount when orderItems change
+   useEffect(() => {
+    if (selectedRewards.length > 0 && orderItems.length > 0) {
+      recalculateDiscount();
+    }
+   }, [orderItems]);
 
    // --- Checkout Logic ---
    const handleCheckout = async () => {
@@ -796,9 +831,23 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     };
 
     try {
-      await placeNewOrder(orderData);
+      const response = await placeNewOrder(orderData);
       toast.success("Order placed successfully!");
       setShowCheckoutModal(false);
+      
+      // Store last order details for the receipt modal
+      if (response && response.id) {
+        setLastOrderDetails({
+          orderId: response.id,
+          timestamp: response.timestamp || new Date().toISOString(),
+          ticketNumber: response.ticketNumber || 'N/A',
+          items: orderDataItems,
+          total: orderTotalAfterDiscount,
+          discountAmount: discountAmount,
+          subtotal: currentOrderSubtotal
+        });
+        setShowReceiptModal(true);
+      }
       
       // Clear cart and selections
       clearFullOrderDetails();
@@ -809,6 +858,22 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
       // If the user is a customer, fetch their rewards again with a slight delay
       // to ensure backend processing is complete
       if (isCustomer) {
+        // Mark redeemed rewards in local storage to ensure they're filtered out on next load
+        selectedRewards.forEach(reward => {
+          const key = `redeemed_reward_${reward.id}${reward.instanceId ? '_' + reward.instanceId : ''}`;
+          localStorage.setItem(key, 'true');
+        });
+
+        // Immediately update available rewards list to remove the redeemed ones
+        setAvailableRewards(prev => 
+          prev.filter(r => 
+            !selectedRewards.some(sr => 
+              sr.id === r.id && (!sr.isVoucher || sr.instanceId === r.instanceId)
+            )
+          )
+        );
+        
+        // Refresh from server with a delay to ensure backend processing is complete
         setTimeout(() => {
           fetchCustomerRewards();
         }, 1000);
@@ -1038,6 +1103,112 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
   console.log('[Menu Component] error:', error);
   console.log('[Menu Component] categories:', categories);
   console.log('[Menu Component] selectedCategory:', selectedCategory);
+
+  // Add this at the end of the component, before the return statement
+  const handlePrintReceipt = () => {
+    if (!lastOrderDetails) return;
+    
+    const receiptWindow = window.open('', '_blank');
+    if (!receiptWindow) {
+      toast.error('Please allow pop-ups to print receipts');
+      return;
+    }
+
+    const receiptContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>EspressoLane Receipt</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; max-width: 400px; margin: 0 auto; }
+            .header { text-align: center; margin-bottom: 20px; }
+            .logo { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+            .order-info { margin-bottom: 20px; border-bottom: 1px dashed #ccc; padding-bottom: 10px; }
+            .items { margin-bottom: 20px; }
+            .item { display: flex; justify-content: space-between; margin-bottom: 5px; }
+            .item-details { font-size: 14px; color: #666; margin-left: 20px; }
+            .totals { margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
+            .total-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+            .grand-total { font-weight: bold; font-size: 18px; margin-top: 5px; }
+            .footer { text-align: center; margin-top: 30px; font-size: 14px; color: #666; }
+            @media print {
+              body { margin: 0; padding: 10px; }
+              .print-button { display: none; }
+            }
+            .print-button { text-align: center; margin-top: 20px; }
+            .print-button button { 
+              padding: 10px 20px; 
+              background: #10b981; 
+              color: white; 
+              border: none; 
+              border-radius: 4px; 
+              cursor: pointer; 
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">EspressoLane</div>
+            <div>Your Daily Coffee Destination</div>
+          </div>
+          
+          <div class="order-info">
+            <div><strong>Order #:</strong> ${lastOrderDetails.ticketNumber}</div>
+            <div><strong>Date:</strong> ${new Date(lastOrderDetails.timestamp).toLocaleString()}</div>
+            <div><strong>Customer:</strong> ${customerName}</div>
+          </div>
+          
+          <div class="items">
+            <h3>Items</h3>
+            ${lastOrderDetails.items.map(item => {
+              const unitPrice = item.unitPriceSnapshot ?? 0;
+              return `
+              <div class="item">
+                <div>
+                  <div>${item.quantity} x ${item.name} ${item.isRewardItem ? '(Free Item)' : `$${(unitPrice * item.quantity).toFixed(2)}`}</div>
+                  ${item.selectedOptionsSnapshot && item.selectedOptionsSnapshot.length > 0 ? 
+                    `<div class="item-details">
+                      ${item.selectedOptionsSnapshot.map(opt => `${opt.group}: ${opt.option}`).join('<br>')}
+                    </div>` : ''}
+                </div>
+                <div>${item.isRewardItem ? '$0.00' : `$${(unitPrice * item.quantity).toFixed(2)}`}</div>
+              </div>
+            `}).join('')}
+          </div>
+          
+          <div class="totals">
+            <div class="total-row">
+              <div>Subtotal:</div>
+              <div>$${lastOrderDetails.subtotal.toFixed(2)}</div>
+            </div>
+            ${lastOrderDetails.discountAmount > 0 ? `
+            <div class="total-row">
+              <div>Discount:</div>
+              <div>-$${lastOrderDetails.discountAmount.toFixed(2)}</div>
+            </div>` : ''}
+            <div class="total-row grand-total">
+              <div>Total:</div>
+              <div>$${lastOrderDetails.total.toFixed(2)}</div>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>Thank you for your order!</p>
+            <p>Visit us again at EspressoLane</p>
+          </div>
+          
+          <div class="print-button">
+            <button onclick="window.print()">Print Receipt</button>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    receiptWindow.document.open();
+    receiptWindow.document.write(receiptContent);
+    receiptWindow.document.close();
+  };
 
   return (
     <div className="flex h-full bg-stone-50">
@@ -1631,6 +1802,101 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
                     </button>
                 </div>
             </div>
+        </div>
+      )}
+
+      {/* Receipt Modal */}
+      {showReceiptModal && lastOrderDetails && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl p-6 sm:p-8 shadow-2xl w-full max-w-md transform transition-all">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-gray-800">Order Receipt</h3>
+              <button 
+                onClick={() => setShowReceiptModal(false)} 
+                className="text-gray-500 hover:text-gray-700 p-1.5 hover:bg-stone-100 rounded-full transition-colors"
+                aria-label="Close modal"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-lg mb-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="text-sm text-gray-600">Order #</p>
+                  <p className="font-semibold text-emerald-800">{lastOrderDetails.ticketNumber}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-600">Date & Time</p>
+                  <p className="font-semibold text-emerald-800">{new Date(lastOrderDetails.timestamp).toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="max-h-60 overflow-y-auto pr-2 mb-6 scrollbar-thin scrollbar-thumb-stone-200 scrollbar-track-white">
+              <h4 className="font-medium text-gray-700 mb-2">Order Items</h4>
+              {lastOrderDetails.items.map((item, index) => (
+                <div key={index} className="flex justify-between items-start py-2 border-b border-stone-100">
+                  <div>
+                    <div className="font-medium text-gray-800">
+                      {item.quantity}x {item.name}
+                      {item.isRewardItem && (
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+                          Free
+                        </span>
+                      )}
+                    </div>
+                    {item.selectedOptionsSnapshot && item.selectedOptionsSnapshot.length > 0 && (
+                      <ul className="text-xs text-gray-500 mt-1">
+                        {item.selectedOptionsSnapshot.map((opt, i) => (
+                          <li key={i}>
+                            {opt.group}: <span className="text-gray-600">{opt.option}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="text-right text-gray-800">
+                    {item.isRewardItem ? '$0.00' : `$${((item.unitPriceSnapshot ?? 0) * item.quantity).toFixed(2)}`}
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="space-y-2 border-t pt-4 border-stone-200">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Subtotal:</span>
+                <span className="font-medium text-gray-800">${lastOrderDetails.subtotal.toFixed(2)}</span>
+              </div>
+              
+              {lastOrderDetails.discountAmount > 0 && (
+                <div className="flex justify-between text-sm text-emerald-600">
+                  <span>Discount Applied:</span>
+                  <span className="font-medium">-${lastOrderDetails.discountAmount.toFixed(2)}</span>
+                </div>
+              )}
+              
+              <div className="flex justify-between text-lg font-bold text-gray-800 pt-2 border-t border-stone-200">
+                <span>Total:</span>
+                <span>${lastOrderDetails.total.toFixed(2)}</span>
+              </div>
+            </div>
+            
+            <div className="mt-6 text-center">
+              <p className="text-sm text-gray-500 mb-4">Thank you for your order!</p>
+              <button
+                onClick={handlePrintReceipt}
+                className="py-2.5 px-6 bg-emerald-600 text-white font-medium rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center mx-auto"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v3a2 2 0 002 2h1v2a2 2 0 002 2h6a2 2 0 002-2v-2h1a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a2 2 0 00-2-2H7a2 2 0 00-2 2zm8 0H7v3h6V4zm0 8H7v4h6v-4z" clipRule="evenodd" />
+                </svg>
+                Print Receipt
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
