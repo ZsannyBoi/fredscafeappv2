@@ -638,4 +638,80 @@ export interface CustomerVoucher {
   grantedBy: 'system_earned' | 'employee_granted' | 'signup_bonus';
   employeeGrantDetails?: { employeeId: string; notes?: string };
 }
-``` 
+```
+
+## 🛡️ Error Handling & Validation
+
+EspressoLane implements a comprehensive error handling and validation system to ensure robustness, security, and a smooth user experience.
+
+### Frontend Error Handling
+
+#### Toast Notifications
+- **React Toastify Integration**: Used throughout the application for user-friendly error and success messages
+- **Context-Aware Messages**: Different toast types (error, success, info) used based on the operation result
+- **Action Feedback**: Success notifications for completed actions like adding items to cart or applying rewards
+
+#### Form Validation
+- **Input Validation**: Client-side validation for required fields and data formats
+- **Cross-Field Validation**: Validation of related fields (e.g., password/confirm password matching)
+- **Immediate Feedback**: Real-time validation during form completion
+- **Specialized Validation**: Type-specific validation for different data types (e.g., emails, prices, dates)
+
+#### Order Processing Validation
+- **Required Options Check**: Validates that all required product options are selected
+- **Quantity Validation**: Ensures valid quantities for order items
+- **Reward Eligibility**: Validates that users can only apply rewards they're eligible for
+
+### Backend Error Handling
+
+#### Authentication Error Handling
+- **Token Validation**: Comprehensive JWT token validation with specific error messages
+- **Missing Token Detection**: 401 Unauthorized responses for missing authentication
+- **Invalid Token Format**: 403 Forbidden responses for malformed tokens
+- **Configuration Checks**: Validation of server configuration (e.g., JWT secret)
+
+#### Database Error Handling
+- **Unique Constraint Handling**: Special handling for duplicate entries (e.g., email addresses)
+- **Transaction Management**: Proper rollbacks for failed database transactions
+- **Connection Management**: Reliable connection release in both success and error cases
+- **Detailed Error Logging**: Comprehensive server-side logging of database errors
+
+#### API Response Structure
+- **Consistent Error Format**: Standardized error response format across all endpoints
+- **Appropriate Status Codes**: HTTP status codes that accurately reflect the error type
+- **User-Friendly Messages**: Clear, actionable messages that can be displayed to users
+- **Error Context**: Additional details for more complex errors
+
+### Input Validation
+
+#### Product and Order Validation
+- **Required Options**: Validation for mandatory product customization options
+- **Price Validation**: Range and format checks for prices and discounts
+- **Quantity Verification**: Positive number validation for quantities
+- **Checkout Validation**: Comprehensive order validation before checkout
+
+#### User Input Validation
+- **Registration Data**: Validation for user registration fields (name, email, password)
+- **Profile Updates**: Validation when updating user profile information
+- **Reward Criteria**: Extensive validation for reward creation and editing
+- **Payment Information**: Validation for payment-related inputs
+
+#### Security Validations
+- **Authentication Checks**: Role-based access control for protected endpoints
+- **Data Sanitization**: Prevention of SQL injection and XSS attacks
+- **File Upload Validation**: Type and size validation for image uploads
+- **Error Suppression**: Prevention of sensitive information disclosure in errors
+
+### Edge Case Handling
+
+- **Empty States**: Appropriate handling of empty data sets
+- **Transaction Integrity**: Database transaction management to ensure data consistency
+- **Concurrency Management**: Handling of simultaneous operations
+- **Unauthorized Access Attempts**: Protection against unauthorized resource access
+
+### Error Handling in API Routes
+
+- **Route-Specific Error Handling**: Customized error responses for different endpoints
+- **Try-Catch Blocks**: Comprehensive error catching around database operations
+- **Cleanup on Error**: Resource cleanup (like file deletion) when operations fail
+- **Informative Logging**: Detailed server-side logging for troubleshooting 
