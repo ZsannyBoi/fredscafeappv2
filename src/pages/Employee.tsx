@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User, EmployeeData, Product } from '../types'; // Renamed to avoid conflict
+import { toast } from 'react-toastify';
 
 // Remove mock data as we will fetch from API
 // const initialEmployeeData: EmployeeData[] = [...];
@@ -117,7 +118,9 @@ const Employee: React.FC = () => {
 
     } catch (err) {
       console.error("Full error details in fetchEmployees:", err); // Log the full error object too
-      setEmployeesError(err instanceof Error ? err.message : 'An unknown error occurred while fetching employees'); // Use specific error state
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred while fetching employees';
+      setEmployeesError(errorMessage); // Use specific error state
+      toast.error(`Failed to fetch employees: ${errorMessage}`);
     } finally {
       setEmployeesLoading(false); // Use specific loading state
     }
@@ -158,7 +161,9 @@ const Employee: React.FC = () => {
       setFilteredUsersForModal(mappedUsers); 
     } catch (err: any) {
       console.error("Failed to fetch available users:", err);
-      setModalUsersError(err.message || 'Failed to load users for modal.');
+      const errorMessage = err.message || 'Failed to load users for modal.';
+      setModalUsersError(errorMessage);
+      toast.error(`Failed to load users: ${errorMessage}`);
     } finally {
       setModalUsersLoading(false);
     }
@@ -267,6 +272,7 @@ const Employee: React.FC = () => {
   const handleAddEmployee = async () => {
     if (!selectedUserForEmployee || !employeeDetails.employeeId.trim() || !employeeDetails.position || !employeeDetails.role) {
       setError('Please select a user, and fill in all required employee details (Employee ID, Position, Role).');
+      toast.error('Please select a user, and fill in all required employee details (Employee ID, Position, Role).');
       return;
     }
     setIsLoading(true);
@@ -302,17 +308,21 @@ const Employee: React.FC = () => {
           errorPayload = await response.json();
           if (response.status === 409 && errorPayload.field === 'employeeIdCode') {
             setEmployeeIdConflictError(errorPayload.message);
+            toast.error(`Employee ID conflict: ${errorPayload.message}`);
             setError(null);
           } else if (response.status === 409 && errorPayload.field === 'userEmail') {
             setError(errorPayload.message);
+            toast.error(errorPayload.message);
             setEmployeeIdConflictError(null);
           } else {
             setError(errorPayload.message || `HTTP error ${response.status}`);
+            toast.error(errorPayload.message || `HTTP error ${response.status}`);
             setEmployeeIdConflictError(null);
           }
         } catch (parseError) {
           console.error("Failed to parse error JSON:", parseError);
           setError(`HTTP error ${response.status}. Could not parse error details.`);
+          toast.error(`HTTP error ${response.status}. Could not parse error details.`);
           setEmployeeIdConflictError(null);
         }
         setIsLoading(false);
@@ -344,10 +354,12 @@ const Employee: React.FC = () => {
       fetchAvailableUsers();
       handleCloseAddEmployeeModal();
       setSelectedEmployee(newDisplayEmployee);
+      toast.success('Employee added successfully!');
 
     } catch (err: any) {
       console.error("Error in handleAddEmployee:", err);
       setError(err.message || 'An unexpected error occurred while adding the employee.');
+      toast.error(err.message || 'An unexpected error occurred while adding the employee.');
       setEmployeeIdConflictError(null);
     } finally {
       setIsLoading(false);
@@ -372,6 +384,7 @@ const Employee: React.FC = () => {
   const handleUpdateEmployee = async () => {
     if (!editingEmployee || !employeeDetails.employeeId.trim() || !employeeDetails.position || !employeeDetails.role) {
       setError('Employee ID, Position, and Role are required.');
+      toast.error('Employee ID, Position, and Role are required.');
       return;
     }
     setIsLoading(true);
@@ -400,14 +413,17 @@ const Employee: React.FC = () => {
             errorPayload = await response.json();
             if (response.status === 409 && errorPayload.field === 'employeeIdCode') {
                 setEmployeeIdConflictError(errorPayload.message);
+                toast.error(`Employee ID conflict: ${errorPayload.message}`);
                 setError(null);
             } else {
                 setError(errorPayload.message || 'Failed to update employee');
+                toast.error(errorPayload.message || 'Failed to update employee');
                 setEmployeeIdConflictError(null);
             }
         } catch (parseError) {
             console.error("Failed to parse error JSON:", parseError);
             setError(`HTTP error ${response.status}. Could not parse error details.`);
+            toast.error(`HTTP error ${response.status}. Could not parse error details.`);
             setEmployeeIdConflictError(null);
         }
         setIsLoading(false);
@@ -446,9 +462,11 @@ const Employee: React.FC = () => {
       }
 
       closeModal();
+      toast.success('Employee updated successfully!');
     } catch (err: any) {
       console.error("Error in handleUpdateEmployee:", err);
       setError(err.message || 'An unexpected error occurred while updating the employee.');
+      toast.error(err.message || 'An unexpected error occurred while updating the employee.');
       setEmployeeIdConflictError(null);
     } finally {
       setIsLoading(false);
@@ -485,7 +503,7 @@ const Employee: React.FC = () => {
         setSelectedEmployee(null);
       }
       fetchAvailableUsers(); // Refresh the list of available users
-      alert('Employee deleted successfully and their role reverted to customer.'); // Optional: Provide success feedback
+      toast.success('Employee deleted successfully and their role reverted to customer.'); // Optional: Provide success feedback
       // No need to call closeModal() if the panel just disappears or shows a placeholder
 
     } catch (err: any) {

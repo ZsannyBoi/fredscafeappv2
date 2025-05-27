@@ -1,5 +1,7 @@
 import { BrowserRouter as Router, Route, Routes, Navigate, Link } from 'react-router-dom';
 import React, { useState, useEffect, useCallback } from 'react';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import Home from './pages/Home';
 import Menu from './pages/Menu';
 import Rewards from './pages/Rewards';
@@ -383,6 +385,7 @@ function App() {
           user ? <Navigate to="/dashboard" /> : <Navigate to="/" />
         } />
       </Routes>
+      <ToastContainer />
     </Router>
   );
 }

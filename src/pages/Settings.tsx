@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { SettingsData, User } from '../types'; // Import SettingsData and User
 import { uploadImage } from '../utils/imageUpload'; // Import the uploadImage utility
+import { toast } from 'react-toastify';
 
 type SettingsCategory = 'General' | 'Display' | 'Privacy and security' | 'Notifications' | 'Support' | 'About';
 
@@ -89,6 +90,7 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
     } catch (error: any) {
       console.error("Error fetching user settings:", error);
       setError(error.message || "Failed to fetch user settings.");
+      toast.error(error.message || "Failed to fetch user settings.");
     } finally {
       setLoading(false);
     }
@@ -324,32 +326,39 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
   };
 
   const handleBannerImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
+    if (!e.target.files || e.target.files.length === 0) return;
+    
+    const file = e.target.files[0];
+    if (!file.type.startsWith('image/')) {
+      setError("Only image files are allowed.");
+      toast.error("Only image files are allowed.");
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Upload the image and get the server-side URL
+      const imageUrl = await uploadImage(file);
       
-      // Set loading state while uploading
-      setLoading(true);
-      setError(null);
+      // Update settings with the server-side image URL
+      setSettings(prev => ({
+        ...prev,
+        profileBanner: { 
+          ...prev.profileBanner, 
+          type: 'image', 
+          value: imageUrl 
+        }
+      }));
       
-      try {
-        // Upload the image to the server
-        const imageUrl = await uploadImage(file);
-        
-        // Update settings with the server-side image URL
-        setSettings(prev => ({
-          ...prev,
-          profileBanner: { 
-            ...prev.profileBanner, 
-            type: 'image', 
-            value: imageUrl 
-          }
-        }));
-      } catch (err: any) {
-        console.error("Error uploading banner image:", err);
-        setError("Failed to upload banner image. Please try again.");
-      } finally {
-        setLoading(false);
-      }
+      toast.success("Banner image uploaded successfully.");
+    } catch (err: any) {
+      console.error("Error uploading banner image:", err);
+      setError("Failed to upload banner image. Please try again.");
+      toast.error("Failed to upload banner image. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -360,19 +369,19 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
     
     // Make sure user is logged in
     if (!user || !user.internalId) {
-      alert("You must be logged in to change your password.");
+      toast.error("You must be logged in to change your password.");
       return;
     }
     
     // Validate password match
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      alert("New passwords do not match!");
+      toast.error("New passwords do not match!");
       return;
     }
     
     // Validate password length
     if (passwordData.newPassword.length < 6) {
-      alert("New password must be at least 6 characters long.");
+      toast.error("New password must be at least 6 characters long.");
       return;
     }
     
@@ -400,12 +409,12 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
       }
       
       const data = await response.json();
-      alert(data.message || "Password updated successfully!");
+      toast.success(data.message || "Password updated successfully!");
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
       
     } catch (error: any) {
       console.error("Error updating password:", error);
-      alert(error.message || "Failed to update password. Please try again.");
+      toast.error(error.message || "Failed to update password. Please try again.");
     }
   };
 
@@ -419,7 +428,7 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
 
   const handleSaveChanges = async () => {
     if (!user?.internalId) {
-      alert("You must be logged in to save settings.");
+      toast.error("You must be logged in to save settings.");
       return;
     }
     
@@ -450,6 +459,7 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
       const data = await response.json();
       console.log("Settings saved:", data);
       setSaveSuccess(true);
+      toast.success("Settings saved successfully!");
       
       // Apply theme changes immediately
       document.documentElement.classList.remove('light', 'dark');
@@ -462,6 +472,7 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
     } catch (error: any) {
       console.error("Error saving settings:", error);
       setError(error.message || "Failed to save settings.");
+      toast.error(error.message || "Failed to save settings.");
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RawRewardItem, CustomerInfo, User, CustomerVoucher, RawRewardItemCriteria, TimeWindow } from '../types'; // Import types, added TimeWindow
+import { toast } from 'react-toastify';
 
 // --- Helper function for safely parsing JSON strings ---
 const safeJsonParse = (jsonString: string, defaultValue = {}) => {
@@ -288,26 +289,18 @@ const Rewards: React.FC<RewardsProps> = ({
 
     // --- Fetch Rewards and Customer Info --- 
     useEffect(() => {
-        // Only proceed if targetCustomerId is valid (not null or undefined)
-        if (!targetCustomerId) {
-            console.log('[Rewards.tsx] No targetCustomerId available, skipping fetch.');
-            setIsLoading(false); // Ensure loading state is false if skipping fetch
-            setCustomerInfo(null);
-            setProcessedRewards([]);
-            setRewardsData([]);
-            setClaimedStatusOverrides({});
-            setClaimedGeneralRewardIds([]);
-            return;
-        }
-
         const fetchData = async () => {
+            if (!targetCustomerId) {
+                console.error("No targetCustomerId provided for Rewards page.");
+                setIsLoading(false);
+                setError("No customer ID provided.");
+                toast.error("No customer ID provided.");
+                return;
+            }
+            
             setIsLoading(true);
             setError(null);
-            setCustomerInfo(null); // Reset while fetching
-            setRewardsData([]);
-            setClaimedStatusOverrides({}); // Reset overrides
-            setClaimedGeneralRewardIds([]); // Reset claimed general reward IDs
-
+            
             try {
                 const token = localStorage.getItem('authToken');
                 const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
@@ -333,15 +326,16 @@ const Rewards: React.FC<RewardsProps> = ({
                 // Let's assume for now `POST /api/rewards/claim` handles the duplicate check.
 
             } catch (fetchError: any) {
-                console.error("Error fetching rewards page data:", fetchError);
+                console.error("Error fetching rewards or customer data:", fetchError);
                 setError(fetchError.message || "Failed to load rewards data.");
+                toast.error(fetchError.message || "Failed to load rewards data.");
             } finally {
                 setIsLoading(false);
             }
         };
-
+        
         fetchData();
-    }, [targetCustomerId, user?.role]); // Add user.role to dependencies
+    }, [targetCustomerId]);
 
     // --- Process Rewards Effect (Runs when fetched data changes) ---
     useEffect(() => {
@@ -416,136 +410,86 @@ const Rewards: React.FC<RewardsProps> = ({
 
      // --- Updated Claim Handler ---
      const handleClaimReward = async (rewardId: string, instanceId?: string) => {
-        if (!user || !user.internalId) {
-            alert("You must be logged in to claim rewards.");
+        if (!targetCustomerId) {
+            console.error("Cannot claim reward: No targetCustomerId available.");
+            toast.error("Cannot claim reward: No customer ID available.");
             return;
         }
 
-        // Find the processed reward from the state
-        const rewardToClaim = processedRewards.find(r => r.id === rewardId);
-        if (!rewardToClaim) {
-            alert("Reward not found.");
-            return;
-        }
-
-        // Enforce stricter eligibility checks
-        if (rewardToClaim.currentStatus !== 'Claim' && rewardToClaim.currentStatus !== 'ActiveVoucher') {
-            // Don't allow claiming if not in the right status
-            const statusMessage = rewardToClaim.currentStatus === 'Claimed' 
-                ? "This reward has already been claimed." 
-                : `Cannot claim this reward. Status: ${rewardToClaim.currentStatus}`;
-            alert(statusMessage);
-            
-            if (rewardToClaim.currentStatus === 'Ineligible' && rewardToClaim.progressMessage) {
-                alert(`Reason: ${rewardToClaim.progressMessage}`);
-            }
-            return;
-        }
-
-        // Check points requirement
-        if (rewardToClaim.pointsCost && !rewardToClaim.isVoucher && customerInfo) {
-            if (customerInfo.loyaltyPoints < rewardToClaim.pointsCost) {
-                alert(`You don't have enough points to claim this reward. Required: ${rewardToClaim.pointsCost}, Available: ${customerInfo.loyaltyPoints}`);
-                return;
-            }
-            
-            // Confirm before claiming points-based rewards
-            if (!window.confirm(`Claim "${rewardToClaim.name}" for ${rewardToClaim.pointsCost} points?`)) {
-                return;
-            }
-        }
-
-        setIsClaiming(true);
+        setIsLoading(true);
         setClaimingRewardId(rewardId);
-        setClaimingError(null);
-
+        
         try {
-          const token = localStorage.getItem('authToken');
-          const headers: HeadersInit = { 'Content-Type': 'application/json' };
-          if (token) headers['Authorization'] = `Bearer ${token}`;
-
-          // Determine endpoint and method based on reward type and instanceId
-          let endpoint = '';
-          let method = 'POST';
-          let body = {};
-
-          // Use processed type property
-          if (rewardToClaim.type === 'voucher' && instanceId) {
-            // Claiming a specific voucher instance (e.g., using it)
-            endpoint = `http://localhost:3001/api/customers/${user.internalId}/vouchers/${instanceId}/claim`; // Endpoint to mark voucher as claimed
-            method = 'PATCH'; // Or PUT depending on backend API design for marking as used
-            // Body might be empty or contain usage details
-          } else {
-            // Claiming a reward definition (standard, loyalty tier, signup, referral)
-            endpoint = `http://localhost:3001/api/customers/${user.internalId}/rewards/claim`;
-            method = 'POST';
-            // Send backend reward_id and make sure we're using the proper customer_id
-            body = { 
-              rewardId: rewardToClaim.reward_id,
-              customerId: user.internalId // Explicitly include customer ID to ensure we're using the right one
-            };
-          }
-
-          console.log(`[Rewards.tsx] Sending ${method} request to ${endpoint} with body:`, body);
-          const response = await fetch(endpoint, {
-              method: method,
-              headers: headers,
-              body: method === 'POST' || method === 'PUT' || method === 'PATCH' ? JSON.stringify(body) : undefined,
-          });
-
-          if (!response.ok) {
-            const errorBody = await response.json().catch(() => ({ message: 'Failed to claim reward. Server returned an error.' }));
-            throw new Error(errorBody.message || `HTTP error! status: ${response.status}`);
-          }
-
-          // Assuming the backend responds with updated customer info or confirmation
-          const result = await response.json();
-          console.log('[Rewards.tsx] Claim successful. Result:', result);
-
-          // Re-fetch data to update the UI with the latest customer points, vouchers, etc.
-          const fetchDataAsync = async () => {
-            setIsLoading(true);
-            setError(null);
-            setCustomerInfo(null); // Reset while fetching
-            setRewardsData([]);
-            setClaimedStatusOverrides({}); // Reset overrides
-            setClaimedGeneralRewardIds([]); // Reset claimed general reward IDs
-
-            try {
-                const token = localStorage.getItem('authToken');
-                const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
-
-                // Fetch Customer Info (includes active vouchers)
-                const customerInfoResponse = await fetch(`http://localhost:3001/api/customers/${targetCustomerId}/info`, { headers });
-                if (!customerInfoResponse.ok) throw new Error(`Failed to fetch customer info: ${customerInfoResponse.statusText}`);
-                const customerData: CustomerInfo = await customerInfoResponse.json();
-                setCustomerInfo(customerData);
-                // Capture claimed general reward IDs from the response
-                setClaimedGeneralRewardIds(customerData.claimedGeneralRewardIds || []);
-
-                // Fetch Reward Definitions
-                const rewardsResponse = await fetch('http://localhost:3001/api/rewards/definitions', { headers });
-                if (!rewardsResponse.ok) throw new Error(`Failed to fetch reward definitions: ${rewardsResponse.statusText}`);
-                const rewardDefs: RawRewardItem[] = await rewardsResponse.json();
-                setRewardsData(rewardDefs);
-            } catch (fetchError: any) {
-                console.error("Error fetching rewards page data:", fetchError);
-                setError(fetchError.message || "Failed to load rewards data.");
-            } finally {
-                setIsLoading(false);
+            const token = localStorage.getItem('authToken');
+            const url = instanceId 
+                ? `http://localhost:3001/api/rewards/customer/${targetCustomerId}/vouchers/${instanceId}/use`
+                : `http://localhost:3001/api/rewards/customer/${targetCustomerId}/claim/${rewardId}`;
+                
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
+                // Normally the body might include order data, verification, etc.
+                body: JSON.stringify({}) 
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ message: "Failed to claim reward." }));
+                throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
             }
-          };
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                // Success - fetch new data to show updated state
+                toast.success(instanceId ? "Voucher applied successfully!" : "Reward claimed successfully!");
+                
+                // Some rewards will give points, vouchers, etc. - handle those cases by refetching data
+                const fetchDataAsync = async () => {
+                    setIsLoading(true);
+                    setError(null);
+                    setCustomerInfo(null); // Reset while fetching
+                    setRewardsData([]);
+                    setClaimedStatusOverrides({}); // Reset overrides
+                    setClaimedGeneralRewardIds([]); // Reset claimed general reward IDs
 
-          // Call the fetch function
-          fetchDataAsync();
+                    try {
+                        const token = localStorage.getItem('authToken');
+                        const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
 
-          alert(`Reward "${rewardToClaim.name}" claimed successfully!`);
+                        // Fetch Customer Info (includes active vouchers)
+                        const customerInfoResponse = await fetch(`http://localhost:3001/api/customers/${targetCustomerId}/info`, { headers });
+                        if (!customerInfoResponse.ok) throw new Error(`Failed to fetch customer info: ${customerInfoResponse.statusText}`);
+                        const customerData: CustomerInfo = await customerInfoResponse.json();
+                        setCustomerInfo(customerData);
+                        // Capture claimed general reward IDs from the response
+                        setClaimedGeneralRewardIds(customerData.claimedGeneralRewardIds || []);
 
-        } catch (err: any) {
-            console.error("Failed to claim reward:", err);
-            setClaimingError(err.message || "An unexpected error occurred during claiming.");
+                        // Fetch Reward Definitions
+                        const rewardsResponse = await fetch('http://localhost:3001/api/rewards/definitions', { headers });
+                        if (!rewardsResponse.ok) throw new Error(`Failed to fetch reward definitions: ${rewardsResponse.statusText}`);
+                        const rewardDefs: RawRewardItem[] = await rewardsResponse.json();
+                        setRewardsData(rewardDefs);
+                    } catch (fetchError: any) {
+                        console.error("Error fetching rewards page data:", fetchError);
+                        setError(fetchError.message || "Failed to load rewards data.");
+                    } finally {
+                        setIsLoading(false);
+                    }
+                };
+                
+                fetchDataAsync();
+            } else {
+                throw new Error(result.message || "Failed to claim reward for an unknown reason.");
+            }
+        } catch (claimError: any) {
+            console.error("Error claiming reward:", claimError);
+            setError(claimError.message || "Failed to claim reward.");
+            toast.error(claimError.message || "Failed to claim reward.");
         } finally {
-            setIsClaiming(false);
+            setIsLoading(false);
             setClaimingRewardId(null);
         }
      };
