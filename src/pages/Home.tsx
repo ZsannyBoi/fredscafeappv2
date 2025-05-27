@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { OrderItem, User } from '../types'; // Import OrderItem and User type
+import { toast } from 'react-toastify';
 
 interface DashboardStats {
   coffeeSold: number;
@@ -214,6 +215,7 @@ const Home: React.FC<HomePageProps> = ({ user, setActivePage, setSelectedOrderId
       } catch (fetchError: any) {
         console.error("Error fetching home page data:", fetchError);
         setError(fetchError.message || "Failed to load dashboard data.");
+        toast.error(`Failed to load dashboard data: ${fetchError.message || "Unknown error"}`);
       } finally {
         setIsLoading(false);
       }
@@ -708,6 +710,8 @@ const Home: React.FC<HomePageProps> = ({ user, setActivePage, setSelectedOrderId
   const handleViewOrderDetails = (order: OrderItem) => {
     setSelectedOrder(order);
     setShowOrderDetailsModal(true);
+    setSelectedOrderId(order.id); // Set the selected order ID in App.tsx state
+    toast.info(`Viewing details for order #${order.ticketNumber || order.id}`);
   };
 
   // Function to close the order details modal

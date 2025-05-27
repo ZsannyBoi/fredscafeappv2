@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, SettingsData } from '../types'; // Import SettingsData
 import ImageUpload from '../components/ImageUpload';
 import { uploadImage } from '../utils/imageUpload';
+import { toast } from 'react-toastify';
 
 // Updated ProfileInfo to better match User type and what we can edit
 interface EditableProfileInfo {
@@ -50,6 +51,7 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
         console.log('[Profile.tsx] User or user.internalId is missing. Stopping fetch.');
         setIsLoading(false);
         setError("User not logged in or user ID not available.");
+        toast.error("User not logged in or user ID not available.");
         return;
       }
 
@@ -103,6 +105,7 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
         console.log('Error fetching user data for profile:', error);
         // We already set up the form with user prop data, so just set the error
         setError(error.message || 'An error occurred while fetching profile data.');
+        toast.error(error.message || 'An error occurred while fetching profile data.');
       } finally {
         console.log('[Profile.tsx] Fetch user data finally. Setting isLoading(false).');
         setIsLoading(false);
@@ -192,11 +195,13 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
         const result = await response.json();
         if (result.user) {
           updateUser(result.user);
+          toast.success('Profile image updated successfully');
         }
       }
     } catch (err: any) {
       console.error('Error updating profile image:', err);
       setError(err.message || 'Failed to update profile image');
+      toast.error(err.message || 'Failed to update profile image');
     }
   };
 
@@ -240,6 +245,7 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
       
       if (!user?.internalId) {
           alert("You must be logged in to update your profile.");
+          toast.error("You must be logged in to update your profile.");
           return;
       }
       
@@ -278,7 +284,7 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
       // If no data to save, exit
       if (Object.keys(dataToSave).length === 0) {
           console.log('[Profile.tsx] No changes detected. Exiting save.');
-          alert('No changes detected.');
+          toast.info('No changes detected.');
           setIsEditing(false);
           setIsSaving(false);
           return;
@@ -334,11 +340,12 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
           }
           
           // Show success message
-          alert('Profile updated successfully!');
+          toast.success('Profile updated successfully!');
           setIsEditing(false); // Exit edit mode
       } catch (error: any) {
           console.error("[Profile.tsx] Error saving profile:", error);
           setError(error.message || "An error occurred while saving your profile.");
+          toast.error(error.message || "An error occurred while saving your profile.");
       } finally {
           setIsSaving(false);
       }

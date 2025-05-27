@@ -2,6 +2,7 @@ import React, { useState, useEffect, useReducer, useRef, useMemo } from 'react';
 import { RawRewardItem, User, RawRewardItemCriteria, TimeWindow, Product, ProcessedRewardItem } from '../types'; // Import the shared type from ../types.ts
 import ImageUpload from '../components/ImageUpload';
 import { uploadImage } from '../utils/imageUpload';
+import { toast } from 'react-toastify';
 
 // User Select Modal Component for Grant Voucher
 interface UserSelectModalProps {
@@ -701,7 +702,9 @@ const EditRewards: React.FC<EditRewardsProps> = ({
 
     } catch (err: any) {
       console.error("Failed to fetch reward definitions:", err);
-      setRewardDefinitionsError(err.message || 'An unknown error occurred while fetching reward definitions.');
+      const errorMessage = err.message || 'An unknown error occurred while fetching reward definitions.';
+      setRewardDefinitionsError(errorMessage);
+      toast.error(`Failed to fetch reward definitions: ${errorMessage}`);
     } finally {
       setRewardDefinitionsLoading(false);
     }
@@ -969,10 +972,12 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       // Basic validation
       if (!formState.name.trim()) {
           setError("Reward name is required.");
+          toast.error("Reward name is required.");
           return false;
       }
       if (!formState.type) {
           setError("Reward type is required.");
+          toast.error("Reward type is required.");
           return false;
       }
 
@@ -981,26 +986,31 @@ const EditRewards: React.FC<EditRewardsProps> = ({
           case 'standard':
               if (!formState.pointsCost && (!formState.freeMenuItemIds || formState.freeMenuItemIds.length === 0)) {
                   setError("Standard rewards must specify either points cost or free menu items.");
+                  toast.error("Standard rewards must specify either points cost or free menu items.");
                   return false;
               }
               break;
           case 'discount_coupon':
               if (!formState.discountPercentage && !formState.discountFixedAmount) {
                   setError("Discount coupons must specify either a percentage or fixed amount discount.");
+                  toast.error("Discount coupons must specify either a percentage or fixed amount discount.");
                   return false;
               }
               if (formState.discountPercentage && (isNaN(parseFloat(formState.discountPercentage)) || parseFloat(formState.discountPercentage) > 100)) {
                   setError("Discount percentage must be a valid number between 0 and 100.");
+                  toast.error("Discount percentage must be a valid number between 0 and 100.");
                   return false;
               }
               if (formState.discountFixedAmount && isNaN(parseFloat(formState.discountFixedAmount))) {
                   setError("Fixed discount amount must be a valid number.");
+                  toast.error("Fixed discount amount must be a valid number.");
                   return false;
               }
               break;
           case 'voucher':
               if ((!formState.freeMenuItemIds || formState.freeMenuItemIds.length === 0) && !formState.discountPercentage && !formState.discountFixedAmount) {
                   setError("Vouchers must specify either free menu items or a discount.");
+                  toast.error("Vouchers must specify either free menu items or a discount.");
                   return false;
               }
               break;
@@ -1009,32 +1019,39 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       // Validate numeric fields if they're provided
       if (formState.pointsCost && (isNaN(parseFloat(formState.pointsCost)) || parseFloat(formState.pointsCost) < 0)) {
           setError("Points cost must be a valid positive number.");
+          toast.error("Points cost must be a valid positive number.");
           return false;
       }
 
       // Validate criteria fields if they're provided
       if (formState.criteria_minSpend && (isNaN(parseFloat(formState.criteria_minSpend)) || parseFloat(formState.criteria_minSpend) < 0)) {
           setError("Minimum spend criteria must be a valid positive number.");
+          toast.error("Minimum spend criteria must be a valid positive number.");
           return false;
       }
       if (formState.criteria_minPoints && (isNaN(parseFloat(formState.criteria_minPoints)) || parseFloat(formState.criteria_minPoints) < 0)) {
           setError("Minimum points criteria must be a valid positive number.");
+          toast.error("Minimum points criteria must be a valid positive number.");
           return false;
       }
       if (formState.criteria_minPurchasesMonthly && (isNaN(parseFloat(formState.criteria_minPurchasesMonthly)) || parseFloat(formState.criteria_minPurchasesMonthly) < 0)) {
           setError("Minimum monthly purchases criteria must be a valid positive number.");
+          toast.error("Minimum monthly purchases criteria must be a valid positive number.");
           return false;
       }
       if (formState.criteria_minReferrals && (isNaN(parseFloat(formState.criteria_minReferrals)) || parseFloat(formState.criteria_minReferrals) < 0)) {
           setError("Minimum referrals criteria must be a valid positive number.");
+          toast.error("Minimum referrals criteria must be a valid positive number.");
           return false;
       }
       if (formState.criteria_cumulativeSpendTotal && (isNaN(parseFloat(formState.criteria_cumulativeSpendTotal)) || parseFloat(formState.criteria_cumulativeSpendTotal) < 0)) {
           setError("Cumulative spend total criteria must be a valid positive number.");
+          toast.error("Cumulative spend total criteria must be a valid positive number.");
           return false;
       }
       if (formState.criteria_minSpendPerTransaction && (isNaN(parseFloat(formState.criteria_minSpendPerTransaction)) || parseFloat(formState.criteria_minSpendPerTransaction) < 0)) {
           setError("Minimum spend per transaction criteria must be a valid positive number.");
+          toast.error("Minimum spend per transaction criteria must be a valid positive number.");
           return false;
       }
 
@@ -1044,10 +1061,12 @@ const EditRewards: React.FC<EditRewardsProps> = ({
           const endDate = new Date(formState.criteria_validEndDate);
           if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
               setError("Invalid date format in validity range.");
+              toast.error("Invalid date format in validity range.");
               return false;
           }
           if (endDate < startDate) {
               setError("End date cannot be before start date.");
+              toast.error("End date cannot be before start date.");
               return false;
           }
       }
@@ -1059,21 +1078,25 @@ const EditRewards: React.FC<EditRewardsProps> = ({
               // Basic validation that it's an array
               if (!Array.isArray(timeWindows)) {
                   setError("Active time windows must be an array.");
+                  toast.error("Active time windows must be an array.");
                   return false;
               }
               // Validate each time window
               for (const window of timeWindows) {
                   if (!window.startTime || !window.endTime) {
                       setError("Each time window must have startTime and endTime.");
+                      toast.error("Each time window must have startTime and endTime.");
                       return false;
                   }
                   if (window.daysOfWeek && !Array.isArray(window.daysOfWeek)) {
                       setError("daysOfWeek must be an array of numbers (0-6).");
+                      toast.error("daysOfWeek must be an array of numbers (0-6).");
                       return false;
                   }
               }
           } catch (e) {
               setError("Active time windows must be valid JSON.");
+              toast.error("Active time windows must be valid JSON.");
               return false;
           }
       }
@@ -1193,6 +1216,7 @@ const EditRewards: React.FC<EditRewardsProps> = ({
         } catch (imgError: any) {
           console.error("Failed to process reward image:", imgError);
           setError(`Image upload failed: ${imgError.message || 'Unknown error'}`);
+          toast.error(`Image upload failed: ${imgError.message || 'Unknown error'}`);
           setIsLoading(false);
           return;
         }
@@ -1230,11 +1254,12 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       
       // Reset form and editing state
       resetFormAndEditingState();
-      alert('Reward added successfully!');
+      toast.success('Reward added successfully!');
 
     } catch (err: any) {
       console.error("Error adding reward:", err);
       setError(err.message || 'An unexpected error occurred while adding the reward.');
+      toast.error(err.message || 'An unexpected error occurred while adding the reward.');
     } finally {
       setIsLoading(false);
     }
@@ -1247,6 +1272,7 @@ const EditRewards: React.FC<EditRewardsProps> = ({
     if (!editingRewardId) {
       console.error("[handleUpdateReward] No editing reward ID found");
       setError("Cannot update reward: Missing ID");
+      toast.error("Cannot update reward: Missing ID");
       return;
     }
 
@@ -1278,6 +1304,7 @@ const EditRewards: React.FC<EditRewardsProps> = ({
         } catch (imgError: any) {
           console.error("Failed to process reward image:", imgError);
           setError(`Image upload failed: ${imgError.message || 'Unknown error'}`);
+          toast.error(`Image upload failed: ${imgError.message || 'Unknown error'}`);
           setIsLoading(false);
           return;
         }
@@ -1324,11 +1351,12 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       // Reset form and editing state
       resetFormAndEditingState();
       setError(null);
-      alert('Reward updated successfully!');
+      toast.success('Reward updated successfully!');
 
     } catch (err: any) {
       console.error("[handleUpdateReward] Error:", err);
       setError(err.message || "Failed to update reward");
+      toast.error(err.message || "Failed to update reward");
     } finally {
       setIsLoading(false);
     }
@@ -1374,11 +1402,14 @@ const EditRewards: React.FC<EditRewardsProps> = ({
         resetFormAndEditingState();
       }
       
-      alert('Reward deleted successfully!');
+      toast.success('Reward deleted successfully');
 
     } catch (err: any) {
       console.error("Error deleting reward:", err);
-      setError(err.message || 'An unknown error occurred while deleting the reward.');
+      setError(err.message || 'An unexpected error occurred while deleting the reward.');
+      toast.error(err.message || 'An unexpected error occurred while deleting the reward.');
+      // Re-fetch the list in case there was an error with optimistic UI update
+      fetchRewardDefinitions();
     } finally {
       setIsLoading(false);
     }
@@ -1477,12 +1508,15 @@ const EditRewards: React.FC<EditRewardsProps> = ({
       }
       
       setGrantSuccessMessage(successMessage);
+      toast.success('Voucher granted successfully!');
       
       // Refresh the rewards list to show updated data
       fetchRewardDefinitions();
     } catch (error) {
       console.error("Error in grant voucher function:", error);
-      setError(`Failed to grant voucher: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = `Failed to grant voucher: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -1551,7 +1585,9 @@ const EditRewards: React.FC<EditRewardsProps> = ({
 
     } catch (err: any) {
       console.error("Failed to fetch products:", err);
-      setProductsError(err.message || 'An unknown error occurred while fetching products.');
+      const errorMessage = err.message || 'An unknown error occurred while fetching products.';
+      setProductsError(errorMessage);
+      toast.error(`Failed to fetch products: ${errorMessage}`);
       // Set an empty array to prevent null reference errors elsewhere
       setProducts([]);
     } finally {

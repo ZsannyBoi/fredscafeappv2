@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { OrderItem, User } from '../types'; // Import OrderItem and User
+import { toast } from 'react-toastify';
 
 // Define props for the Order component
 interface OrderPageProps {
@@ -36,6 +37,7 @@ const Order: React.FC<OrderPageProps> = ({ user, selectedOrderId, setSelectedOrd
     } catch (fetchError: any) {
       console.error("Failed to fetch orders:", fetchError);
       setError(`Failed to load orders: ${fetchError.message}`);
+      toast.error(`Failed to load orders: ${fetchError.message}`);
       setLocalOrders([]);
     } finally {
       setIsLoading(false);
@@ -118,6 +120,7 @@ const Order: React.FC<OrderPageProps> = ({ user, selectedOrderId, setSelectedOrd
       // const updatedOrderFromServer: OrderItem = await response.json();
       // setLocalOrders(prevOrders =>
       console.log(`Successfully updated order ${orderId} to status ${newStatus}`);
+      toast.success(`Order ${orderId} status updated to ${newStatus}`);
 
     } catch (updateError: any) {
       console.error(`Failed to update order ${orderId} status:`, updateError);
@@ -127,14 +130,14 @@ const Order: React.FC<OrderPageProps> = ({ user, selectedOrderId, setSelectedOrd
              order.id === orderId ? originalOrder : order
            )
         );
-      alert(`Error updating order status: ${updateError.message}`);
+      toast.error(`Error updating order status: ${updateError.message}`);
     }
   };
 
   // --- NEW: Function to handle archiving an order ---
   const handleArchiveOrder = async (orderId: string) => {
     if (!user || (user.role !== 'manager' && user.role !== 'cashier')) {
-      alert('Permission denied.'); // Should not happen if button is hidden, but good practice
+      toast.error('Permission denied.'); // Should not happen if button is hidden, but good practice
       return;
     }
     if (!window.confirm(`Are you sure you want to archive order ${orderId}? It will be hidden from this view.`)) {
@@ -164,13 +167,14 @@ const Order: React.FC<OrderPageProps> = ({ user, selectedOrderId, setSelectedOrd
       }
 
       console.log(`Successfully archived order ${orderId}`);
+      toast.success(`Order ${orderId} archived successfully`);
       // No need to refetch on success, optimistic update handles it.
 
     } catch (archiveError: any) {
       console.error(`Failed to archive order ${orderId}:`, archiveError);
       // Ensure state is reverted if not already done
       fetchOrders(); // Refetch to be sure
-      alert(`Error archiving order: ${archiveError.message}`);
+      toast.error(`Error archiving order: ${archiveError.message}`);
     }
   };
 
