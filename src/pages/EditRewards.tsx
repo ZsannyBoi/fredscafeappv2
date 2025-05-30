@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useReducer, useRef, useMemo } from 'react';
-import { RawRewardItem, User, RawRewardItemCriteria, TimeWindow, Product, ProcessedRewardItem } from '../types'; // Import the shared type from ../types.ts
+import { RawRewardItem, User, RawRewardItemCriteria, TimeWindow, Product, ProcessedRewardItem, Category } from '../types'; // Import the shared type from ../types.ts
 import ImageUpload from '../components/ImageUpload';
 import { uploadImage } from '../utils/imageUpload';
 import { toast } from 'react-toastify';
+import { formatDistanceToNow } from 'date-fns';
+import classNames from 'classnames';
+import Modal from '../components/Modal';
+import FormGroup from '../components/FormGroup';
 
 // User Select Modal Component for Grant Voucher
 interface UserSelectModalProps {
@@ -606,6 +610,11 @@ const EditRewards: React.FC<EditRewardsProps> = ({
   const [productsLoading, setProductsLoading] = useState<boolean>(true);
   const [productsError, setProductsError] = useState<string | null>(null);
 
+  // --- Categories State ---
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoriesLoading, setIsCategoriesLoading] = useState<boolean>(true);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+
   // --- Fetch Reward Definitions ---
   const fetchRewardDefinitions = async () => {
     setRewardDefinitionsLoading(true);
@@ -713,6 +722,113 @@ const EditRewards: React.FC<EditRewardsProps> = ({
   // Fetch rewards on component mount
   useEffect(() => {
     fetchRewardDefinitions();
+  }, []); // Empty dependency array means this runs once on mount
+
+  // --- Fetch Products ---
+  const fetchProducts = async () => {
+    setProductsLoading(true);
+    setProductsError(null);
+    try {
+      const token = localStorage.getItem('authToken');
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else {
+        console.warn("[EditRewards.tsx] Auth token not found for fetching products.");
+        // Depending on requirements, you might want to throw an error or redirect
+        // throw new Error("Authentication token missing."); 
+      }
+
+      const response = await fetch('http://localhost:3001/api/products', {
+        headers: headers,
+      });
+
+      if (!response.ok) {
+        let errorDetail = `Failed to fetch products. Status: ${response.status}`;
+         try {
+            const errorData = await response.json();
+            errorDetail = errorData.message || errorDetail;
+         } catch (e) {
+            // Ignore parsing error if response is not JSON
+         }
+        throw new Error(errorDetail);
+      }
+        
+      let productData;
+      try {
+        productData = await response.json();
+      } catch (error) {
+        console.error("Error parsing products response:", error);
+        throw new Error("Invalid response format from server");
+      }
+
+      // Ensure we have a valid array of products and add safeguards
+      const validatedProducts = Array.isArray(productData) 
+        ? productData.map(p => {
+            if (!p) return null;
+            // Ensure each product has at least the required fields
+            return {
+              id: p.id || p.product_id || `unknown-${Date.now()}`,
+              name: p.name || 'Unknown Product',
+              price: typeof p.price === 'number' ? p.price : 
+                    typeof p.base_price === 'number' ? p.base_price : 0,
+              image: p.image || p.image_url || '/src/assets/product.png',
+              category: p.category || p.category_name || 'Uncategorized',
+              description: p.description || '',
+              availability: p.availability || 'available',
+              tags: Array.isArray(p.tags) ? p.tags : [],
+              optionCategories: Array.isArray(p.optionCategories) ? p.optionCategories : []
+            } as Product;
+          }).filter(Boolean) as Product[] // Remove any null entries and cast to Product[]
+        : [];
+
+      setProducts(validatedProducts);
+      console.log("Fetched products:", validatedProducts); // Log fetched data
+
+    } catch (err: any) {
+      console.error("Failed to fetch products:", err);
+      const errorMessage = err.message || 'An unknown error occurred while fetching products.';
+      setProductsError(errorMessage);
+      toast.error(`Failed to fetch products: ${errorMessage}`);
+      // Set an empty array to prevent null reference errors elsewhere
+      setProducts([]);
+    } finally {
+      setProductsLoading(false);
+    }
+  };
+
+  // Fetch products on component mount
+  useEffect(() => {
+    fetchProducts();
+  }, []); // Empty dependency array means this runs once on mount
+
+  // --- Fetch Categories ---
+  const fetchCategories = async () => {
+    try {
+      setIsCategoriesLoading(true);
+      setCategoriesError(null);
+      
+      const response = await fetch('http://localhost:3001/api/categories');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch categories: ${response.status}`);
+      }
+      
+      const categoriesData: Category[] = await response.json();
+      setCategories(categoriesData);
+      console.log("[fetchCategories] Fetched categories:", categoriesData);
+    } catch (error: any) {
+      console.error("Error fetching categories:", error);
+      setCategoriesError(error.message || "Failed to fetch categories");
+    } finally {
+      setIsCategoriesLoading(false);
+    }
+  };
+
+  // --- Load Initial Data ---
+  useEffect(() => {
+    fetchRewardDefinitions();
+    fetchProducts();
+    fetchCategories(); // Add this line
   }, []); // Empty dependency array means this runs once on mount
 
   // Handle the backend URL prefix for uploaded images
@@ -1522,84 +1638,6 @@ const EditRewards: React.FC<EditRewardsProps> = ({
     }
   };
 
-  // --- Fetch Products ---
-  const fetchProducts = async () => {
-    setProductsLoading(true);
-    setProductsError(null);
-    try {
-      const token = localStorage.getItem('authToken');
-      const headers: HeadersInit = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      } else {
-        console.warn("[EditRewards.tsx] Auth token not found for fetching products.");
-        // Depending on requirements, you might want to throw an error or redirect
-        // throw new Error("Authentication token missing."); 
-      }
-
-      const response = await fetch('http://localhost:3001/api/products', {
-        headers: headers,
-      });
-
-      if (!response.ok) {
-        let errorDetail = `Failed to fetch products. Status: ${response.status}`;
-         try {
-            const errorData = await response.json();
-            errorDetail = errorData.message || errorDetail;
-         } catch (e) {
-            // Ignore parsing error if response is not JSON
-         }
-        throw new Error(errorDetail);
-      }
-        
-      let productData;
-      try {
-        productData = await response.json();
-      } catch (error) {
-        console.error("Error parsing products response:", error);
-        throw new Error("Invalid response format from server");
-      }
-
-      // Ensure we have a valid array of products and add safeguards
-      const validatedProducts = Array.isArray(productData) 
-        ? productData.map(p => {
-            if (!p) return null;
-            // Ensure each product has at least the required fields
-            return {
-              id: p.id || p.product_id || `unknown-${Date.now()}`,
-              name: p.name || 'Unknown Product',
-              price: typeof p.price === 'number' ? p.price : 
-                    typeof p.base_price === 'number' ? p.base_price : 0,
-              image: p.image || p.image_url || '/src/assets/product.png',
-              category: p.category || p.category_name || 'Uncategorized',
-              description: p.description || '',
-              availability: p.availability || 'available',
-              tags: Array.isArray(p.tags) ? p.tags : [],
-              optionCategories: Array.isArray(p.optionCategories) ? p.optionCategories : []
-            } as Product;
-          }).filter(Boolean) as Product[] // Remove any null entries and cast to Product[]
-        : [];
-
-      setProducts(validatedProducts);
-      console.log("Fetched products:", validatedProducts); // Log fetched data
-
-    } catch (err: any) {
-      console.error("Failed to fetch products:", err);
-      const errorMessage = err.message || 'An unknown error occurred while fetching products.';
-      setProductsError(errorMessage);
-      toast.error(`Failed to fetch products: ${errorMessage}`);
-      // Set an empty array to prevent null reference errors elsewhere
-      setProducts([]);
-    } finally {
-      setProductsLoading(false);
-    }
-  };
-
-  // Fetch products on component mount
-  useEffect(() => {
-    fetchProducts();
-  }, []); // Empty dependency array means this runs once on mount
-
   // --- Product Selection Handler ---
   const handleProductSelectionChange = (field: keyof RewardFormState, selectedIds: string[]) => {
     try {
@@ -1869,7 +1907,18 @@ const EditRewards: React.FC<EditRewardsProps> = ({
                                           />
                                    </FormGroup>
                                   <FormGroup label="Requires Product Category (by name)">
-                                     <input type="text" name="criteria_requiresProductCategory" value={formState.criteria_requiresProductCategory} onChange={handleInputChange} className="form-input" placeholder="e.g., Coffee" disabled={isLoading} />
+                                     <CategorySelector
+                                        categories={categories}
+                                        selectedCategory={formState.criteria_requiresProductCategory}
+                                        onChange={(categoryName) => dispatch({ 
+                                          type: 'SET_FIELD', 
+                                          field: 'criteria_requiresProductCategory', 
+                                          value: categoryName 
+                                        })}
+                                        disabled={isLoading}
+                                        loading={categoriesLoading}
+                                        error={categoriesError}
+                                      />
           </FormGroup>
                                  <FormGroup label="Minimum Purchases Monthly">
                                      <input type="number" name="criteria_minPurchasesMonthly" value={formState.criteria_minPurchasesMonthly} onChange={handleInputChange} className="form-input" step="1" min="0" disabled={isLoading} />
@@ -2112,7 +2161,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                         />
                         <div className="flex flex-wrap gap-1 mt-1">
                             {categories.map(category => (
-                                <button
+                                <button type="button"
                                     key={category}
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -2203,7 +2252,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                             {safeSelectedIds.length} products selected
                         </span>
                         <div className="flex gap-2">
-                            <button 
+                            <button type="button"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     onChange([]);
@@ -2212,7 +2261,7 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
                             >
                                 Clear
                             </button>
-                            <button 
+                            <button type="button"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     setIsOpen(false);
@@ -2227,6 +2276,47 @@ const ProductMultiSelect: React.FC<ProductMultiSelectProps> = ({
             )}
         </div>
     );
+};
+
+// Category Selector Component
+const CategorySelector: React.FC<{
+  categories: Category[];
+  selectedCategory: string;
+  onChange: (categoryName: string) => void;
+  disabled?: boolean;
+  loading: boolean;
+  error: string | null;
+}> = ({ 
+  categories,
+  selectedCategory,
+  onChange,
+  disabled = false,
+  loading,
+  error
+}) => {
+  if (loading) {
+    return <div className="text-gray-500">Loading categories...</div>;
+  }
+
+  if (error) {
+    return <div className="text-red-500">Error loading categories: {error}</div>;
+  }
+
+  return (
+    <select
+      value={selectedCategory}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      className="form-select"
+    >
+      <option value="">Select a category</option>
+      {categories.map(category => (
+        <option key={category.category_id} value={category.name}>
+          {category.name}
+        </option>
+      ))}
+    </select>
+  );
 };
 
 export default EditRewards; 

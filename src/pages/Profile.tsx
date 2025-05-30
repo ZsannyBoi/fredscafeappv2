@@ -3,6 +3,7 @@ import { User, SettingsData } from '../types'; // Import SettingsData
 import ImageUpload from '../components/ImageUpload';
 import { uploadImage } from '../utils/imageUpload';
 import { toast } from 'react-toastify';
+import MembershipManager from '../components/MembershipManager';
 
 // Updated ProfileInfo to better match User type and what we can edit
 interface EditableProfileInfo {
@@ -518,6 +519,22 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
                   )}
                   <p className="text-xs text-gray-500 mt-1">Share this code with friends!</p>
                 </FormGroup>
+                <FormGroup label="Membership Status">
+                  {user?.membershipTier ? (
+                    <div className="flex items-center space-x-2">
+                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                        {user.membershipTier}
+                      </span>
+                      {user.tierJoinDate && (
+                        <span className="text-xs text-gray-500">
+                          since {new Date(user.tierJoinDate).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="profile-text text-gray-500">No active membership</p>
+                  )}
+                </FormGroup>
                 {/* Address can be multi-line */}
                 <FormGroup label="Address" className="md:col-span-2">
                   {isEditing ? (
@@ -541,6 +558,9 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
             </div>
           </form>
         </div>
+        
+        {/* Membership Manager Component */}
+        <MembershipManager user={user} updateUser={updateUser} />
       </div>
     </div>
   );

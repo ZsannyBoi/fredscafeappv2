@@ -62,6 +62,8 @@ function App() {
                 referralCode: data.user.referralCode || undefined, // Match field names with backend
                 phone_number: data.user.phone_number || undefined,
                 address: data.user.address || undefined,
+                membershipTier: data.user.membershipTier || undefined, // Add membership tier
+                tierJoinDate: data.user.tierJoinDate || undefined, // Add tier join date
             });
             console.log('[App.tsx] User state set successfully from verification.');
             console.log('[App.tsx] User state value after setUser (verification):', user);
@@ -219,6 +221,8 @@ function App() {
                 referralCode: data.user.referralCode || undefined, // Match field names with backend
                 phone_number: data.user.phone_number || undefined,
                 address: data.user.address || undefined,
+                membershipTier: data.user.membershipTier || undefined, // Add membership tier
+                tierJoinDate: data.user.tierJoinDate || undefined, // Add tier join date
           });
           console.log('[App.tsx] User state set successfully after login.');
           console.log('[App.tsx] User state value after setUser (login):', user);

@@ -507,46 +507,29 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
       
       const claimedRewards: AvailableReward[] = await claimedResponse.json();
       
-      // Get available (active but not yet claimed) rewards
-      const availableResponse = await fetch(`http://localhost:3001/api/rewards/available`, { headers });
+      // Combine claimed rewards only (show only rewards the user has claimed and not yet redeemed)
+      const combinedRewards = claimedRewards.map(reward => ({
+        ...reward,
+        isClaimed: true,
+        isEligible: true,
+        isNewlyRedeemed: Boolean(localStorage.getItem(`newly_redeemed_${reward.id}_${user.internalId}`))
+      }));
       
-      if (!availableResponse.ok) {
-        throw new Error(`Failed to fetch available rewards: ${availableResponse.statusText}`);
-      }
-      
-      const eligibleRewards: AvailableReward[] = await availableResponse.json();
-      
-      // Check for newly redeemed rewards (marked by Rewards.tsx)
-      const newlyRedeemedFlags: Record<string, boolean> = {};
-      
-      // Combine claimed and eligible rewards
-      const combinedRewards = [
-        ...claimedRewards.map(reward => ({
-          ...reward,
-          isClaimed: true,
-          isEligible: true,
-          isNewlyRedeemed: Boolean(localStorage.getItem(`newly_redeemed_${reward.id}_${user.internalId}`))
-        })),
-        ...eligibleRewards.map(reward => ({
-          ...reward,
-          isEligible: true,
-          isNewlyRedeemed: Boolean(localStorage.getItem(`newly_redeemed_${reward.id}_${user.internalId}`))
-        }))
-      ];
-      
-      // Filter out any rewards that were redeemed in previous sessions (stored in localStorage)
+      // Filter out redeemed rewards (vouchers and general) based on localStorage
       const filteredRewards = combinedRewards.filter(reward => {
-        // Check if this reward is marked as redeemed in localStorage
-        const storageKey = `redeemed_reward_${reward.id}${reward.instanceId ? '_' + reward.instanceId : ''}`;
+        // Determine localStorage key for this reward
+        const storageKey = reward.isVoucher && reward.instanceId
+          ? `redeemed_reward_${reward.id}_${reward.instanceId}`
+          : `redeemed_reward_${reward.id}`;
         const isRedeemedInLocalStorage = localStorage.getItem(storageKey) === 'true';
-        
-        // Also check if this reward is in the currently selected rewards
+
+        // Also check if this reward is currently selected
         const isCurrentlySelected = selectedRewards.some(
-          selectedReward => selectedReward.id === reward.id && 
-          (reward.isVoucher ? selectedReward.instanceId === reward.instanceId : true)
+          selectedReward => selectedReward.id === reward.id &&
+            (reward.isVoucher ? selectedReward.instanceId === reward.instanceId : true)
         );
-        
-        // Keep only rewards that haven't been redeemed and aren't currently selected
+
+        // Keep rewards that aren't redeemed and aren't currently selected
         return !isRedeemedInLocalStorage && !isCurrentlySelected;
       });
       
@@ -656,6 +639,8 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
             }
         });
         setOrderItems(newOrderItems);
+        // Mark this general reward as redeemed locally so it's removed from available list
+        localStorage.setItem(`redeemed_reward_${reward.id}`, 'true');
     }
    };
 

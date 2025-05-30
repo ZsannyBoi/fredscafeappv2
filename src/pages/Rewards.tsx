@@ -13,11 +13,23 @@ const safeJsonParse = (jsonString: string, defaultValue = {}) => {
 };
 
 // Define interface for Reward data AS DISPLAYED ON THIS PAGE (includes dynamic status)
-interface ProcessedRewardItem extends RawRewardItem {
-    currentStatus: 'Claim' | 'Claimed' | 'Ineligible' | 'ActiveVoucher'; 
+interface UIRewardItem {
+    id: string;
+    reward_id: string;
+    name: string;
+    description?: string;
+    image: string;
+    type: RawRewardItem['type'];
+    pointsCost?: number;
+    discountPercentage?: number;
+    discountFixedAmount?: number;
+    earningHint?: string;
+    freeMenuItemIds: string[];
+    criteria?: RawRewardItemCriteria;
+    currentStatus: 'Claim' | 'Claimed' | 'Ineligible' | 'ActiveVoucher';
     progressMessage: string;
-    instanceId?: string; // For vouchers, to uniquely identify the claimed instance
-    isVoucher?: boolean; // Flag to identify if this is from customerInfo.activeVouchers
+    instanceId?: string;
+    isVoucher?: boolean;
 }
 
 // Updated Props for the Rewards component
@@ -195,7 +207,7 @@ const checkRewardEligibility = (
     claimedGeneralRewardIds: Set<string>,
     isVoucherInstance: boolean = false,
     voucherInstance?: CustomerVoucher
-): Pick<ProcessedRewardItem, 'currentStatus' | 'progressMessage'> => {
+): Pick<UIRewardItem, 'currentStatus' | 'progressMessage'> => {
     // SECURITY NOTE: This entire function performs client-side eligibility checks.
     // While useful for UI feedback, these checks MUST be re-validated on the server before any reward is granted or claimed.
     // The server should be the ultimate authority on eligibility.
@@ -209,7 +221,7 @@ const checkRewardEligibility = (
     }
 
     // 2. Check if this general reward ID is in the claimedGeneralRewardIds set (for non-vouchers)
-    if (!isVoucherInstance && claimedGeneralRewardIds.has(reward.id)) {
+    if (!isVoucherInstance && claimedGeneralRewardIds.has(reward.reward_id)) {
         return { currentStatus: 'Claimed', progressMessage: 'You have already claimed this reward.' };
     }
 
@@ -224,7 +236,7 @@ const checkRewardEligibility = (
     const currentTime = today.getHours().toString().padStart(2, '0') + ":" + today.getMinutes().toString().padStart(2, '0'); // HH:MM
     const currentDayOfWeek = today.getDay(); // 0=Sun, 6=Sat
 
-    const criteria = reward.criteria;
+    const criteria = reward.criteria_json ? safeJsonParse(reward.criteria_json) : undefined;
     if (criteria) {
         const checks: CriteriaCheckResult[] = [
             checkPointCriteria(criteria, customer),
@@ -250,17 +262,17 @@ const checkRewardEligibility = (
         if (progressMessages.length > 0) {
             message = progressMessages.join(' ');
         }
-        if (reward.pointsCost && customer.loyaltyPoints < reward.pointsCost) {
+        if (reward.points_cost && customer.loyaltyPoints < reward.points_cost) {
              // Eligible based on criteria, but not enough points to redeem
-             return { currentStatus: 'Ineligible', progressMessage: `Eligible, but need ${reward.pointsCost} points to redeem (Have ${customer.loyaltyPoints}).` };
+             return { currentStatus: 'Ineligible', progressMessage: `Eligible, but need ${reward.points_cost} points to redeem (Have ${customer.loyaltyPoints}).` };
         }
         return { currentStatus: 'Claim', progressMessage: message };
     } else {
         let message = 'Not eligible.';
         if (unmetMessages.length > 0) {
             message = unmetMessages.join(' ');
-        } else if (reward.earningHint) {
-            message = reward.earningHint; // Fallback to hint if no specific unmet criteria shown
+        } else if (reward.earning_hint) {
+            message = reward.earning_hint; // Fallback to hint if no specific unmet criteria shown
         }
         return { currentStatus: 'Ineligible', progressMessage: message };
     }
@@ -274,13 +286,13 @@ const Rewards: React.FC<RewardsProps> = ({
     // --- State for fetched data ---
     const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
     const [rewardsData, setRewardsData] = useState<RawRewardItem[]>([]);
-    const [claimedGeneralRewardIds, setClaimedGeneralRewardIds] = useState<string[]>([]); // New state for claimed general reward IDs
+    const [claimedGeneralRewardIds, setClaimedGeneralRewardIds] = useState<string[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
 
     // --- Local UI State ---
-    const [processedRewards, setProcessedRewards] = useState<ProcessedRewardItem[]>([]);
-    const [selectedReward, setSelectedReward] = useState<ProcessedRewardItem | null>(null);
+    const [processedRewards, setProcessedRewards] = useState<UIRewardItem[]>([]);
+    const [selectedReward, setSelectedReward] = useState<UIRewardItem | null>(null);
     const [rewardSearchTerm, setRewardSearchTerm] = useState('');
     const [isClaiming, setIsClaiming] = useState<string | null>(null); // Track claiming process (rewardId or instanceId)
     const [claimedStatusOverrides, setClaimedStatusOverrides] = useState<Record<string, boolean>>({}); // Track claimed status locally after successful API call
@@ -352,33 +364,35 @@ const Rewards: React.FC<RewardsProps> = ({
         const claimedGeneralRewardIds = new Set(customerInfo.claimedGeneralRewardIds || []); // Use claimedGeneralRewardIds
 
         const processed = rewardsData.map(reward => {
-            // Map RawRewardItem properties (snake_case) to ProcessedRewardItem structure (camelCase)
-            const processedReward: ProcessedRewardItem = {
-                id: String(reward.reward_id), // Map backend ID to frontend ID
-                reward_id: reward.reward_id, // Keep backend ID for clarity if needed
-                name: reward.name,
-                description: reward.description,
-                image: reward.image_url || '/src/assets/reward_placeholder.png', // Map image_url to image
-                type: reward.type,
-                pointsCost: reward.points_cost, // Map points_cost
-                discountPercentage: reward.discount_percentage, // Map
-                discountFixedAmount: reward.discount_fixed_amount, // Map
-                earningHint: reward.earning_hint, // Map earning_hint
-                freeMenuItemIds: reward.free_menu_item_ids || [], // Ensure it's an array
-                criteria: reward.criteria_json ? safeJsonParse(reward.criteria_json) : undefined, // Parse criteria_json
-            };
-
-            // Check eligibility using the raw reward definition and fetched customer data
-            // checkRewardEligibility is designed to accept RawRewardItem
-            const eligibilityResult = checkRewardEligibility(
-                reward, // Pass the raw reward item
+            // Determine eligibility
+            const { currentStatus, progressMessage } = checkRewardEligibility(
+                reward,
                 customerInfo,
                 claimedVoucherInstances,
                 claimedGeneralRewardIds
             );
-
-            // Combine processed reward with eligibility result
-            return { ...processedReward, ...eligibilityResult };
+            // Build the full processed reward object
+            const item: UIRewardItem = {
+                id: String(reward.reward_id),
+                reward_id: reward.reward_id,
+                name: reward.name,
+                description: reward.description,
+                image: reward.image_url || '/src/assets/reward_placeholder.png',
+                type: reward.type,
+                pointsCost: reward.points_cost,
+                discountPercentage: reward.discount_percentage,
+                discountFixedAmount: reward.discount_fixed_amount,
+                earningHint: reward.earning_hint,
+                freeMenuItemIds: reward.free_menu_item_ids || [],
+                criteria: reward.criteria_json ? safeJsonParse(reward.criteria_json) : undefined,
+                // Voucher-specific fields: find matching instance if any
+                isVoucher: false,
+                instanceId: undefined,
+                // Status fields
+                currentStatus,
+                progressMessage
+            };
+            return item;
         });
 
         setProcessedRewards(processed);
@@ -404,7 +418,7 @@ const Rewards: React.FC<RewardsProps> = ({
         );
 
      // --- Selection (remains the same) ---
-     const handleSelectReward = (reward: ProcessedRewardItem) => {
+     const handleSelectReward = (reward: UIRewardItem) => {
         setSelectedReward(reward);
      };
 
@@ -422,17 +436,16 @@ const Rewards: React.FC<RewardsProps> = ({
         try {
             const token = localStorage.getItem('authToken');
             const url = instanceId 
-                ? `http://localhost:3001/api/rewards/customer/${targetCustomerId}/vouchers/${instanceId}/use`
-                : `http://localhost:3001/api/rewards/customer/${targetCustomerId}/claim/${rewardId}`;
+                ? `http://localhost:3001/api/customers/${targetCustomerId}/vouchers/${instanceId}/claim`
+                : `http://localhost:3001/api/customers/${targetCustomerId}/rewards/claim`;
                 
             const response = await fetch(url, {
-                method: 'POST',
+                method: instanceId ? 'PATCH' : 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     ...(token ? { 'Authorization': `Bearer ${token}` } : {})
                 },
-                // Normally the body might include order data, verification, etc.
-                body: JSON.stringify({}) 
+                body: JSON.stringify(instanceId ? {} : { rewardId })
             });
             
             if (!response.ok) {
@@ -442,57 +455,55 @@ const Rewards: React.FC<RewardsProps> = ({
             
             const result = await response.json();
             
-            if (result.success) {
-                // Success - fetch new data to show updated state
-                toast.success(instanceId ? "Voucher applied successfully!" : "Reward claimed successfully!");
-                
-                // Mark the reward as redeemed in localStorage to ensure Menu.tsx knows it's claimed
-                const storageKey = `redeemed_reward_${rewardId}${instanceId ? '_' + instanceId : ''}`;
+            // Treat successful HTTP status as success; show server message
+            toast.success(instanceId ? "Voucher applied successfully!" : (result.message || "Reward claimed successfully!"));
+            
+            // Only mark voucher redemptions as redeemed in localStorage so Menu.tsx removes them
+            if (instanceId) {
+                const storageKey = `redeemed_reward_${rewardId}_${instanceId}`;
                 localStorage.setItem(storageKey, 'true');
-                
-                // Also mark it as newly redeemed so it will show up in the Menu rewards modal
-                if (user?.internalId) {
-                    localStorage.setItem(`newly_redeemed_${rewardId}_${user.internalId}`, 'true');
-                }
-                
-                // Some rewards will give points, vouchers, etc. - handle those cases by refetching data
-                const fetchDataAsync = async () => {
-                    setIsLoading(true);
-                    setError(null);
-                    setCustomerInfo(null); // Reset while fetching
-                    setRewardsData([]);
-                    setClaimedStatusOverrides({}); // Reset overrides
-                    setClaimedGeneralRewardIds([]); // Reset claimed general reward IDs
-
-                    try {
-                        const token = localStorage.getItem('authToken');
-                        const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
-
-                        // Fetch Customer Info (includes active vouchers)
-                        const customerInfoResponse = await fetch(`http://localhost:3001/api/customers/${targetCustomerId}/info`, { headers });
-                        if (!customerInfoResponse.ok) throw new Error(`Failed to fetch customer info: ${customerInfoResponse.statusText}`);
-                        const customerData: CustomerInfo = await customerInfoResponse.json();
-                        setCustomerInfo(customerData);
-                        // Capture claimed general reward IDs from the response
-                        setClaimedGeneralRewardIds(customerData.claimedGeneralRewardIds || []);
-
-                        // Fetch Reward Definitions
-                        const rewardsResponse = await fetch('http://localhost:3001/api/rewards/definitions', { headers });
-                        if (!rewardsResponse.ok) throw new Error(`Failed to fetch reward definitions: ${rewardsResponse.statusText}`);
-                        const rewardDefs: RawRewardItem[] = await rewardsResponse.json();
-                        setRewardsData(rewardDefs);
-                    } catch (fetchError: any) {
-                        console.error("Error fetching rewards page data:", fetchError);
-                        setError(fetchError.message || "Failed to load rewards data.");
-                    } finally {
-                        setIsLoading(false);
-                    }
-                };
-                
-                fetchDataAsync();
-            } else {
-                throw new Error(result.message || "Failed to claim reward for an unknown reason.");
             }
+            
+            // Also mark it as newly redeemed so it will show up in the Menu rewards modal
+            if (user?.internalId) {
+                localStorage.setItem(`newly_redeemed_${rewardId}_${user.internalId}`, 'true');
+            }
+            
+            // Some rewards will give points, vouchers, etc. - handle those cases by refetching data
+            const fetchDataAsync = async () => {
+                setIsLoading(true);
+                setError(null);
+                setCustomerInfo(null); // Reset while fetching
+                setRewardsData([]);
+                setClaimedStatusOverrides({}); // Reset overrides
+                setClaimedGeneralRewardIds([]); // Reset claimed general reward IDs
+
+                try {
+                    const token = localStorage.getItem('authToken');
+                    const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+
+                    // Fetch Customer Info (includes active vouchers)
+                    const customerInfoResponse = await fetch(`http://localhost:3001/api/customers/${targetCustomerId}/info`, { headers });
+                    if (!customerInfoResponse.ok) throw new Error(`Failed to fetch customer info: ${customerInfoResponse.statusText}`);
+                    const customerData: CustomerInfo = await customerInfoResponse.json();
+                    setCustomerInfo(customerData);
+                    // Capture claimed general reward IDs from the response
+                    setClaimedGeneralRewardIds(customerData.claimedGeneralRewardIds || []);
+
+                    // Fetch Reward Definitions
+                    const rewardsResponse = await fetch('http://localhost:3001/api/rewards/definitions', { headers });
+                    if (!rewardsResponse.ok) throw new Error(`Failed to fetch reward definitions: ${rewardsResponse.statusText}`);
+                    const rewardDefs: RawRewardItem[] = await rewardsResponse.json();
+                    setRewardsData(rewardDefs);
+                } catch (fetchError: any) {
+                    console.error("Error fetching rewards page data:", fetchError);
+                    setError(fetchError.message || "Failed to load rewards data.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            fetchDataAsync();
         } catch (claimError: any) {
             console.error("Error claiming reward:", claimError);
             setError(claimError.message || "Failed to claim reward.");
@@ -504,7 +515,7 @@ const Rewards: React.FC<RewardsProps> = ({
      };
 
     // --- getButtonProps (Updated to use isClaiming state) ---
-    const getButtonProps = (reward: ProcessedRewardItem) => {
+    const getButtonProps = (reward: UIRewardItem) => {
         const identifier = reward.isVoucher ? reward.instanceId : reward.id;
         if (isClaiming === identifier) {
              return { text: 'Claiming...', className: 'bg-gray-400 animate-pulse', disabled: true };
@@ -574,7 +585,7 @@ const Rewards: React.FC<RewardsProps> = ({
 
              {/* Rewards Grid - Uses processedRewards, getButtonProps, handleClaimReward */} 
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-5 overflow-y-auto pr-2 flex-1">
-                {filteredRewards.map(reward => {
+                {filteredRewards.map((reward: UIRewardItem) => {
                     const buttonProps = getButtonProps(reward);
                     const identifier = reward.isVoucher ? reward.instanceId : reward.id;
                     return (
@@ -588,7 +599,7 @@ const Rewards: React.FC<RewardsProps> = ({
                                 onClick={(e) => {
                                      e.stopPropagation(); 
                                      if (reward.currentStatus === 'Claim' || reward.currentStatus === 'ActiveVoucher') {
-                                         handleClaimReward(reward.id!, reward.instanceId);
+                                         handleClaimReward(reward.id, reward.instanceId);
                                      }
                                 }}
                                 className={`w-full py-2 rounded-lg text-white text-sm font-medium transition-colors ${buttonProps.className}`}
@@ -665,7 +676,7 @@ const Rewards: React.FC<RewardsProps> = ({
                                     onClick={(e) => {
                                          e.stopPropagation();
                                          if (selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher') {
-                                            handleClaimReward(selectedReward.id!, selectedReward.instanceId);
+                                            handleClaimReward(selectedReward.id, selectedReward.instanceId);
                                          }
                                     }}
                                     className={`w-full py-3 rounded-xl text-white font-semibold text-md transition-colors ${buttonProps.className}`}
@@ -696,7 +707,7 @@ const DetailItem: React.FC<{ label: string; value: string }> = ({ label, value }
 );
 
 // Helper to check if a reward is claimable (client-side check based on currentStatus)
-const isRewardClaimable = (reward: ProcessedRewardItem) => {
+const isRewardClaimable = (reward: UIRewardItem) => {
   // Access processed camelCase property
   return reward.currentStatus === 'Claim';
 };

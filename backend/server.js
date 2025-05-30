@@ -1722,18 +1722,17 @@ if (redeemedRewards && Array.isArray(redeemedRewards) && redeemedRewards.length 
               [orderId, reward.voucherId, reward.rewardId]
             );
           } else {
-            // For general rewards, add to customer_claimed_rewards table
+            // For general rewards, update existing claim to mark as redeemed (or insert a new claim+redeem record)
             const customerId = req.user.internalId;
-            // Check if already claimed
-            const [existingClaim] = await connection.execute(
-              'SELECT id FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ?',
-              [customerId, reward.rewardId]
+            // Try to mark an existing unredeemed claim as redeemed
+            const [updateResult] = await connection.execute(
+              'UPDATE customer_claimed_rewards SET redeemed_date = NOW(), order_id = ? WHERE customer_id = ? AND reward_id = ? AND redeemed_date IS NULL',
+              [orderId, customerId, reward.rewardId]
             );
-            
-            // Only insert if not already claimed
-            if (existingClaim.length === 0) {
+            // If no existing claim was updated, insert a combined claim+redeem record
+            if (updateResult.affectedRows === 0) {
               await connection.execute(
-                'INSERT INTO customer_claimed_rewards (customer_id, reward_id, claimed_date, order_id) VALUES (?, ?, NOW(), ?)',
+                'INSERT INTO customer_claimed_rewards (customer_id, reward_id, claimed_date, redeemed_date, order_id) VALUES (?, ?, NOW(), NOW(), ?)',
                 [customerId, reward.rewardId, orderId]
               );
             }
@@ -2022,7 +2021,7 @@ app.post('/api/rewards/claim', authenticateToken, async (req, res) => {
 
       // Check if already claimed
       const [claimedRows] = await connection.query(
-        'SELECT 1 FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ? LIMIT 1',
+        'SELECT 1 FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ? AND redeemed_date IS NULL LIMIT 1',
         [customerDbId, rewardId]
       );
       if (claimedRows.length > 0) {
@@ -2971,7 +2970,7 @@ app.get('/api/customers/:customerId/info', authenticateToken, async (req, res) =
     const [activeVouchers] = await db.query(voucherSql, [customerId]);
 
     // 5. Fetch Claimed General Rewards
-    const claimedSql = `SELECT reward_id FROM customer_claimed_rewards WHERE customer_id = ?`;
+    const claimedSql = `SELECT reward_id FROM customer_claimed_rewards WHERE customer_id = ? AND redeemed_date IS NULL`;
     const [claimedRewardsRows] = await db.query(claimedSql, [customerId]);
     const claimedGeneralRewardIds = claimedRewardsRows.map(row => row.reward_id); // Extract IDs
 
@@ -3935,7 +3934,10 @@ app.get('/api/rewards/available', authenticateToken, async (req, res) => {
     
     const [availableRewardsRows] = await connection.query(availableRewardsSql);
     
-    // 4. Get customer stats for eligibility checks
+    // Exclude general rewards already claimed by customer so /available only returns unclaimed ones
+    const unclaimedRewardsRows = availableRewardsRows.filter(row => !claimedRewardIds.has(row.id));
+    
+    // 4. Get customer stats for eligibility checks (using unclaimedRewardsRows)
     const now = new Date();
     const birthDate = customer.birth_date ? new Date(customer.birth_date) : null;
     const currentMonth = now.getMonth();
@@ -3944,10 +3946,10 @@ app.get('/api/rewards/available', authenticateToken, async (req, res) => {
     const currentDayOfWeek = now.getDay();
     
     // 5. Process each reward for eligibility
-    const formattedRewards = availableRewardsRows.map(reward => {
+    const formattedRewards = unclaimedRewardsRows.map(reward => {
         // Check if already claimed (for non-voucher types)
         const isClaimed = claimedRewardIds.has(reward.id);
-        
+
         // Default to eligible
         let isEligible = true;
         let ineligibilityReason = '';
@@ -4533,7 +4535,7 @@ app.put('/api/users/:userId/password', authenticateToken, async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
     
     // 4. Update the password in the database
-    await db.query('UPDATE Users SET password_hash = ? WHERE user_id = ?', [hashedPassword, userId]);
+    await db.query('UPDATE Users SET password_hash = ? WHERE email = ?', [hashedPassword, email]);
     
     res.status(200).json({ message: 'Password updated successfully' });
   } catch (error) {
@@ -4628,7 +4630,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     
     // Update the user's password in the database
-    await db.query('UPDATE Users SET password = ? WHERE email = ?', [hashedPassword, email]);
+    await db.query('UPDATE Users SET password_hash = ? WHERE email = ?', [hashedPassword, email]);
     
     // Delete the reset request
     pendingApprovals.passwordResets.delete(token);
@@ -5520,5 +5522,619 @@ app.get('/api/rewards/claimed-only', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Error fetching claimed rewards', error: error.message });
   } finally {
     if (connection) connection.release();
+  }
+});
+
+// New: Verify claimed vs redeemed status for a set of rewards
+app.post('/api/rewards/verify-claimed', authenticateToken, async (req, res) => {
+  const { rewardIds } = req.body;
+  const customerId = req.user.internalId;
+  if (!Array.isArray(rewardIds)) {
+    return res.status(400).json({ message: 'Invalid or missing rewardIds' });
+  }
+  let connection;
+  try {
+    connection = await db.getConnection();
+    // Build placeholders for IN clause
+    const placeholders = rewardIds.map(() => '?').join(',');
+    // Fetch claim records
+    const [rows] = await connection.execute(
+      `SELECT reward_id, redeemed_date FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id IN (${placeholders})`,
+      [customerId, ...rewardIds]
+    );
+    // Aggregate status by rewardId
+    const statusMap = {};
+    rows.forEach(row => {
+      const id = row.reward_id;
+      if (!statusMap[id]) statusMap[id] = { isClaimed: false, isRedeemed: false };
+      if (row.redeemed_date) {
+        statusMap[id].isRedeemed = true;
+      } else {
+        statusMap[id].isClaimed = true;
+      }
+    });
+    const result = rewardIds.map(id => ({
+      rewardId: id,
+      isClaimed: !!statusMap[id]?.isClaimed,
+      isRedeemed: !!statusMap[id]?.isRedeemed
+    }));
+    res.json({ rewards: result });
+  } catch (err) {
+    console.error('Error verifying claimed rewards:', err);
+    res.status(500).json({ message: 'Error verifying claimed rewards' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// -------------------- MEMBERSHIP MANAGEMENT ENDPOINTS --------------------
+
+// Get available membership tiers
+app.get('/api/memberships/tiers', authenticateToken, async (req, res) => {
+  try {
+    // For now, we're hardcoding the available tiers
+    // In a production system, these would likely come from a database table
+    const tiers = [
+      {
+        id: "bronze",
+        name: "Bronze",
+        monthlyPrice: 4.99,
+        yearlyPrice: 49.99,
+        benefits: [
+          "5% discount on all purchases",
+          "Earn 1.2x loyalty points",
+          "Free coffee on your birthday"
+        ],
+        pointsMultiplier: 1.2
+      },
+      {
+        id: "silver",
+        name: "Silver",
+        monthlyPrice: 9.99,
+        yearlyPrice: 99.99,
+        benefits: [
+          "10% discount on all purchases",
+          "Earn 1.5x loyalty points",
+          "Free coffee on your birthday",
+          "One free pastry per month"
+        ],
+        pointsMultiplier: 1.5
+      },
+      {
+        id: "gold",
+        name: "Gold",
+        monthlyPrice: 19.99,
+        yearlyPrice: 199.99,
+        benefits: [
+          "15% discount on all purchases",
+          "Earn 2x loyalty points",
+          "Free coffee on your birthday",
+          "Two free pastries per month",
+          "Priority pickup"
+        ],
+        pointsMultiplier: 2.0
+      }
+    ];
+
+    res.json({ tiers });
+  } catch (error) {
+    console.error('Error fetching membership tiers:', error);
+    res.status(500).json({ message: 'Error fetching membership tiers', error: error.message });
+  }
+});
+
+// Get user's membership history
+app.get('/api/users/:userId/memberships', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check authorization - user can only access their own membership data unless they are an employee/manager
+    if (req.user.userId !== parseInt(userId) && !['manager', 'employee'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Not authorized to access this membership data' });
+    }
+
+    const membershipsQuery = `
+      SELECT transaction_id, tier, amount, transaction_date, status, end_date
+      FROM membershiptransactions
+      WHERE user_id = ?
+      ORDER BY transaction_date DESC
+    `;
+
+    const [memberships] = await db.query(membershipsQuery, [userId]);
+
+    // Get current active membership
+    const activeMembershipQuery = `
+      SELECT transaction_id, tier, amount, transaction_date, status, end_date
+      FROM membershiptransactions
+      WHERE user_id = ? AND status = 'active' AND (end_date IS NULL OR end_date > NOW())
+      ORDER BY transaction_date DESC
+      LIMIT 1
+    `;
+
+    const [activeMembership] = await db.query(activeMembershipQuery, [userId]);
+
+    res.json({
+      memberships,
+      activeMembership: activeMembership.length > 0 ? activeMembership[0] : null
+    });
+  } catch (error) {
+    console.error('Error fetching user memberships:', error);
+    res.status(500).json({ message: 'Error fetching user memberships', error: error.message });
+  }
+});
+
+// Subscribe to a membership tier
+app.post('/api/users/:userId/memberships', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { tier, amount, isPaid, duration = 'monthly', status = 'pending' } = req.body;
+    
+    // Validate inputs
+    if (!tier || !amount) {
+      return res.status(400).json({ message: 'Tier and amount are required' });
+    }
+
+    // Ensure user can only subscribe themselves unless they are a manager
+    if (req.user.userId !== parseInt(userId) && req.user.role !== 'manager') {
+      return res.status(403).json({ message: 'Not authorized to subscribe another user' });
+    }
+
+    // Check if user already has an active membership
+    const checkExistingQuery = `
+      SELECT transaction_id, tier
+      FROM membershiptransactions
+      WHERE user_id = ? AND status = 'active' AND (end_date IS NULL OR end_date > NOW())
+      LIMIT 1
+    `;
+    
+    const [existingMembership] = await db.query(checkExistingQuery, [userId]);
+    
+    if (existingMembership.length > 0) {
+      return res.status(400).json({
+        message: 'User already has an active membership',
+        currentMembership: existingMembership[0]
+      });
+    }
+    
+    // For real-world systems, here we would process payment through a payment gateway
+    // For this demo, we'll assume the payment is successful if isPaid is true
+    
+    if (!isPaid && req.user.role !== 'manager') {
+      return res.status(400).json({ message: 'Payment required for membership' });
+    }
+    
+    // Calculate end date based on duration (monthly or yearly)
+    const now = new Date();
+    let endDate = null;
+    
+    if (duration === 'monthly') {
+      endDate = new Date(now);
+      endDate.setMonth(endDate.getMonth() + 1);
+    } else if (duration === 'yearly') {
+      endDate = new Date(now);
+      endDate.setFullYear(endDate.getFullYear() + 1);
+    }
+    
+    // Start a transaction
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Determine initial status - managers can directly activate, others need approval
+      const initialStatus = req.user.role === 'manager' ? 'active' : status;
+      
+      // Insert membership transaction
+      const insertMembershipQuery = `
+        INSERT INTO membershiptransactions
+        (user_id, tier, amount, transaction_date, status, end_date)
+        VALUES (?, ?, ?, NOW(), ?, ?)
+      `;
+      
+      const [membershipResult] = await connection.query(insertMembershipQuery, [
+        userId, tier, amount, initialStatus, endDate
+      ]);
+      
+      // If status is active, update user's membership tier
+      if (initialStatus === 'active') {
+        const updateUserQuery = `
+          UPDATE users
+          SET membership_tier = ?, tier_join_date = CURDATE()
+          WHERE user_id = ?
+        `;
+        
+        await connection.query(updateUserQuery, [tier, userId]);
+      }
+      
+      // Commit transaction
+      await connection.commit();
+      
+      // Get the inserted membership details
+      const [membershipDetails] = await db.query(
+        'SELECT * FROM membershiptransactions WHERE transaction_id = ?',
+        [membershipResult.insertId]
+      );
+      
+      // Get updated user info
+      const [userInfo] = await db.query(
+        'SELECT user_id, name, email, membership_tier, tier_join_date FROM users WHERE user_id = ?',
+        [userId]
+      );
+      
+      // Generate approval URL if status is pending
+      let approvalUrl = null;
+      if (initialStatus === 'pending') {
+        // Use TestApproval component for membership approvals
+        approvalUrl = `http://localhost:5173/test-approval?type=membership&transactionId=${membershipResult.insertId}&userId=${userId}&tier=${tier}`;
+      }
+      
+      res.status(201).json({
+        message: initialStatus === 'active' ? 'Membership subscription successful' : 'Membership application submitted for approval',
+        membership: membershipDetails[0],
+        user: userInfo[0],
+        approvalUrl
+      });
+    } catch (error) {
+      // If error, rollback the transaction
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Error subscribing to membership:', error);
+    res.status(500).json({ message: 'Error subscribing to membership', error: error.message });
+  }
+});
+
+// Cancel a membership
+app.put('/api/users/:userId/memberships/:transactionId/cancel', authenticateToken, async (req, res) => {
+  try {
+    const { userId, transactionId } = req.params;
+    
+    // Ensure user can only cancel their own membership unless they are a manager
+    if (req.user.userId !== parseInt(userId) && req.user.role !== 'manager') {
+      return res.status(403).json({ message: 'Not authorized to cancel this membership' });
+    }
+    
+    // Verify the membership belongs to the user
+    const verifyQuery = `
+      SELECT transaction_id, tier, status
+      FROM membershiptransactions
+      WHERE transaction_id = ? AND user_id = ?
+    `;
+    
+    const [membership] = await db.query(verifyQuery, [transactionId, userId]);
+    
+    if (membership.length === 0) {
+      return res.status(404).json({ message: 'Membership not found' });
+    }
+    
+    if (membership[0].status !== 'active') {
+      return res.status(400).json({ message: 'Membership is not active' });
+    }
+    
+    // Start a transaction
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update the membership status to cancelled
+      const updateMembershipQuery = `
+        UPDATE membershiptransactions
+        SET status = 'cancelled', updated_at = NOW()
+        WHERE transaction_id = ?
+      `;
+      
+      await connection.query(updateMembershipQuery, [transactionId]);
+      
+      // Update user's membership tier to null
+      const updateUserQuery = `
+        UPDATE users
+        SET membership_tier = NULL
+        WHERE user_id = ?
+      `;
+      
+      await connection.query(updateUserQuery, [userId]);
+      
+      // Commit transaction
+      await connection.commit();
+      
+      res.json({
+        message: 'Membership cancelled successfully',
+        membershipId: transactionId
+      });
+    } catch (error) {
+      // If error, rollback the transaction
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Error cancelling membership:', error);
+    res.status(500).json({ message: 'Error cancelling membership', error: error.message });
+  }
+});
+
+// Process membership approval (by manager)
+app.put('/api/memberships/:transactionId/approve', authenticateToken, async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    
+    // Only managers can approve memberships
+    if (req.user.role !== 'manager') {
+      return res.status(403).json({ message: 'Not authorized to approve memberships' });
+    }
+    
+    // First, check if the membership transaction exists and is in pending status
+    const getMembershipQuery = `
+      SELECT mt.*, u.user_id, u.name, u.email
+      FROM membershiptransactions mt
+      JOIN users u ON mt.user_id = u.user_id
+      WHERE mt.transaction_id = ? AND mt.status = 'pending'
+    `;
+    
+    const [memberships] = await db.query(getMembershipQuery, [transactionId]);
+    
+    if (memberships.length === 0) {
+      return res.status(404).json({ message: 'Pending membership not found' });
+    }
+    
+    const membership = memberships[0];
+    const userId = membership.user_id;
+    
+    // Start a transaction
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Update membership status to active
+      const updateMembershipQuery = `
+        UPDATE membershiptransactions
+        SET status = 'active', updated_at = NOW()
+        WHERE transaction_id = ?
+      `;
+      
+      await connection.query(updateMembershipQuery, [transactionId]);
+      
+      // Update user's membership tier
+      const updateUserQuery = `
+        UPDATE users
+        SET membership_tier = ?, tier_join_date = CURDATE()
+        WHERE user_id = ?
+      `;
+      
+      await connection.query(updateUserQuery, [membership.tier, userId]);
+      
+      // Commit transaction
+      await connection.commit();
+      
+      // Get updated user data
+      const membershipQuery = `
+        SELECT membership_tier, loyalty_points
+        FROM users
+        WHERE user_id = ?
+      `;
+      
+      const [memberships] = await db.query(membershipQuery, [userId]);
+      
+      if (memberships.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      const { tier, loyalty_points } = memberships[0];
+      
+      res.json({
+        message: 'Membership approved successfully',
+        membership: {
+          ...membership,
+          status: 'active'
+        }
+      });
+    } catch (error) {
+      // If error, rollback the transaction
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Error approving membership:', error);
+    res.status(500).json({ message: 'Error approving membership', error: error.message });
+  }
+});
+
+// Process membership rejection (by manager)
+app.put('/api/memberships/:transactionId/reject', authenticateToken, async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    
+    // Only managers can reject memberships
+    if (req.user.role !== 'manager') {
+      return res.status(403).json({ message: 'Not authorized to reject memberships' });
+    }
+    
+    // First, check if the membership transaction exists and is in pending status
+    const getMembershipQuery = `
+      SELECT mt.*, u.user_id, u.name, u.email
+      FROM membershiptransactions mt
+      JOIN users u ON mt.user_id = u.user_id
+      WHERE mt.transaction_id = ? AND mt.status = 'pending'
+    `;
+    
+    const [memberships] = await db.query(getMembershipQuery, [transactionId]);
+    
+    if (memberships.length === 0) {
+      return res.status(404).json({ message: 'Pending membership not found' });
+    }
+    
+    const membership = memberships[0];
+    
+    // Update membership status to rejected
+    const updateMembershipQuery = `
+      UPDATE membershiptransactions
+      SET status = 'rejected', updated_at = NOW()
+      WHERE transaction_id = ?
+    `;
+    
+    await db.query(updateMembershipQuery, [transactionId]);
+    
+    res.json({
+      message: 'Membership rejected successfully',
+      membership: {
+        ...membership,
+        status: 'rejected'
+      }
+    });
+  } catch (error) {
+    console.error('Error rejecting membership:', error);
+    res.status(500).json({ message: 'Error rejecting membership', error: error.message });
+  }
+});
+
+// Apply membership benefits to an order
+app.post('/api/orders/:orderId/apply-membership-benefits', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+    
+    // Get user's active membership
+    const membershipQuery = `
+      SELECT m.tier, u.loyalty_points
+      FROM membershiptransactions m
+      JOIN users u ON m.user_id = u.user_id
+      WHERE m.user_id = ? AND m.status = 'active' 
+      AND (m.end_date IS NULL OR m.end_date > NOW())
+      ORDER BY m.transaction_date DESC
+      LIMIT 1
+    `;
+    
+    const [memberships] = await db.query(membershipQuery, [userId]);
+    
+    if (memberships.length === 0) {
+      return res.status(400).json({ message: 'No active membership found for this user' });
+    }
+    
+    const { tier, loyalty_points } = memberships[0];
+    
+    // Get order details
+    const orderQuery = `
+      SELECT original_amount, total_amount
+      FROM orders
+      WHERE order_id = ?
+    `;
+    
+    const [orders] = await db.query(orderQuery, [orderId]);
+    
+    if (orders.length === 0) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    
+    const order = orders[0];
+    let originalAmount = order.original_amount || order.total_amount;
+    let discountPercentage = 0;
+    
+    // Apply discount based on tier
+    switch(tier.toLowerCase()) {
+      case 'bronze':
+        discountPercentage = 5;
+        break;
+      case 'silver':
+        discountPercentage = 10;
+        break;
+      case 'gold':
+        discountPercentage = 15;
+        break;
+      default:
+        discountPercentage = 0;
+    }
+    
+    // Calculate discount amount
+    const discountAmount = (originalAmount * discountPercentage / 100);
+    const discountedTotal = originalAmount - discountAmount;
+    
+    // Update order with discount
+    const updateOrderQuery = `
+      UPDATE orders
+      SET total_amount = ?,
+          discount_amount = ?,
+          original_amount = ?
+      WHERE order_id = ?
+    `;
+    
+    await db.query(updateOrderQuery, [
+      discountedTotal,
+      discountAmount,
+      originalAmount,
+      orderId
+    ]);
+    
+    // Add loyalty points with tier multiplier
+    let pointsMultiplier = 1.0;
+    switch(tier.toLowerCase()) {
+      case 'bronze':
+        pointsMultiplier = 1.2;
+        break;
+      case 'silver':
+        pointsMultiplier = 1.5;
+        break;
+      case 'gold':
+        pointsMultiplier = 2.0;
+        break;
+    }
+    
+    // Calculate points to award (base points are typically based on amount spent)
+    const basePoints = Math.floor(originalAmount);
+    const bonusPoints = Math.floor(basePoints * pointsMultiplier) - basePoints;
+    
+    // Add loyalty points transaction for the bonus points
+    if (bonusPoints > 0) {
+      const pointsQuery = `
+        INSERT INTO loyalty_points_transactions
+        (user_id, points, transaction_type, order_id, transaction_date, notes)
+        VALUES (?, ?, 'earned', ?, NOW(), ?)
+      `;
+      
+      await db.query(pointsQuery, [
+        userId,
+        bonusPoints,
+        orderId,
+        `Membership bonus (${tier} tier): ${bonusPoints} points`
+      ]);
+      
+      // Update user's loyalty points
+      const updatePointsQuery = `
+        UPDATE users
+        SET loyalty_points = loyalty_points + ?
+        WHERE user_id = ?
+      `;
+      
+      await db.query(updatePointsQuery, [bonusPoints, userId]);
+    }
+    
+    // Get updated order
+    const [updatedOrder] = await db.query(
+      'SELECT * FROM orders WHERE order_id = ?',
+      [orderId]
+    );
+    
+    res.json({
+      message: 'Membership benefits applied successfully',
+      order: updatedOrder[0],
+      benefits: {
+        discountPercentage,
+        discountAmount,
+        originalAmount,
+        discountedTotal,
+        bonusPoints
+      }
+    });
+  } catch (error) {
+    console.error('Error applying membership benefits:', error);
+    res.status(500).json({ message: 'Error applying membership benefits', error: error.message });
   }
 });

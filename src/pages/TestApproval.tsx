@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 interface ApprovalRequest {
-  type: 'password_reset' | 'checkout';
+  type: 'password_reset' | 'checkout' | 'membership';
   data: {
     // For password reset
     email?: string;
@@ -11,6 +11,11 @@ interface ApprovalRequest {
     orderTotal?: number;
     customerName?: string;
     items?: { name: string; quantity: number }[];
+    // For membership
+    transactionId?: string;
+    userId?: string;
+    tier?: string;
+    userName?: string;
   };
 }
 
@@ -24,16 +29,63 @@ const TestApproval: React.FC = () => {
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    
+    // Check for JSON data format
     const data = urlParams.get('data');
     if (data) {
       try {
         const parsedData = JSON.parse(decodeURIComponent(data));
         setApprovalData(parsedData);
+        return;
       } catch (error) {
-        setError('Invalid approval data');
+        console.error('Failed to parse JSON data:', error);
+        // Continue to check for individual parameters
       }
     }
+    
+    // Handle direct URL parameters for membership approval
+    const type = urlParams.get('type');
+    if (type === 'membership') {
+      const transactionId = urlParams.get('transactionId');
+      const userId = urlParams.get('userId');
+      const tier = urlParams.get('tier');
+      
+      if (transactionId && userId && tier) {
+        // Fetch user name if possible
+        fetchUserName(userId).then(userName => {
+          setApprovalData({
+            type: 'membership',
+            data: {
+              transactionId,
+              userId,
+              tier,
+              userName
+            }
+          });
+        });
+      } else {
+        setError('Missing required membership parameters');
+      }
+      return;
+    }
+    
+    // If we reach here, we couldn't parse the data
+    setError('Invalid approval data');
   }, []);
+  
+  // Fetch user name for better display
+  const fetchUserName = async (userId: string): Promise<string> => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/users/${userId}`);
+      if (response.ok) {
+        const userData = await response.json();
+        return userData.name || 'Unknown User';
+      }
+    } catch (error) {
+      console.error('Error fetching user name:', error);
+    }
+    return 'Unknown User';
+  };
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,28 +143,46 @@ const TestApproval: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:3001/api/orders/approve-checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ orderId: approvalData.data.orderId }),
-      });
+      if (approvalData.type === 'checkout') {
+        const response = await fetch('http://localhost:3001/api/orders/approve-checkout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ orderId: approvalData.data.orderId }),
+        });
 
-      if (!response.ok) {
-        throw new Error('Failed to approve order');
-      }
+        if (!response.ok) {
+          throw new Error('Failed to approve order');
+        }
 
-      // Send message to parent window
-      if (window.opener) {
-        window.opener.postMessage({ type: 'ORDER_COMPLETED' }, '*');
+        // Send message to parent window
+        if (window.opener) {
+          window.opener.postMessage({ type: 'ORDER_COMPLETED' }, '*');
+        }
+      } else if (approvalData.type === 'membership') {
+        const response = await fetch(`http://localhost:3001/api/memberships/${approvalData.data.transactionId}/approve`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to approve membership');
+        }
+
+        // Send message to parent window
+        if (window.opener) {
+          window.opener.postMessage({ type: 'MEMBERSHIP_APPROVED' }, '*');
+        }
       }
 
       // Close this window
       window.close();
     } catch (error) {
-      console.error('Error approving order:', error);
-      setError('Failed to approve order. Please try again.');
+      console.error(`Error approving ${approvalData.type}:`, error);
+      setError(`Failed to approve ${approvalData.type}. Please try again.`);
     } finally {
       setLoading(false);
     }
@@ -125,31 +195,52 @@ const TestApproval: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:3001/api/orders/reject-checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ orderId: approvalData.data.orderId }),
-      });
+      if (approvalData.type === 'checkout') {
+        const response = await fetch('http://localhost:3001/api/orders/reject-checkout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ orderId: approvalData.data.orderId }),
+        });
 
-      if (!response.ok) {
-        throw new Error('Failed to reject order');
-      }
+        if (!response.ok) {
+          throw new Error('Failed to reject order');
+        }
 
-      // Send message to parent window
-      if (window.opener) {
-        window.opener.postMessage({ 
-          type: 'ORDER_REJECTED',
-          reason: 'Order was rejected by the approver'
-        }, '*');
+        // Send message to parent window
+        if (window.opener) {
+          window.opener.postMessage({ 
+            type: 'ORDER_REJECTED',
+            reason: 'Order was rejected by the approver'
+          }, '*');
+        }
+      } else if (approvalData.type === 'membership') {
+        const response = await fetch(`http://localhost:3001/api/memberships/${approvalData.data.transactionId}/reject`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to reject membership');
+        }
+
+        // Send message to parent window
+        if (window.opener) {
+          window.opener.postMessage({ 
+            type: 'MEMBERSHIP_REJECTED',
+            reason: 'Membership application was rejected'
+          }, '*');
+        }
       }
 
       // Close this window
       window.close();
     } catch (error) {
-      console.error('Error rejecting order:', error);
-      setError('Failed to reject order. Please try again.');
+      console.error(`Error rejecting ${approvalData.type}:`, error);
+      setError(`Failed to reject ${approvalData.type}. Please try again.`);
     } finally {
       setLoading(false);
     }
@@ -222,6 +313,68 @@ const TestApproval: React.FC = () => {
               {loading ? 'Resetting Password...' : 'Reset Password'}
             </button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (approvalData.type === 'membership') {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
+          <h2 className="text-2xl font-bold mb-4">Membership Approval Request</h2>
+          
+          <div className="mb-6">
+            <h3 className="font-semibold mb-2">Membership Details:</h3>
+            <div className="bg-gray-50 p-4 rounded">
+              <p className="mb-2"><span className="font-medium">Customer:</span> {approvalData.data.userName}</p>
+              <p className="mb-2"><span className="font-medium">Tier:</span> <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-semibold">{approvalData.data.tier}</span></p>
+              <p className="mb-2"><span className="font-medium">Benefits:</span></p>
+              <ul className="list-disc list-inside text-sm ml-2">
+                {approvalData.data.tier?.toLowerCase() === 'bronze' && (
+                  <>
+                    <li>5% discount on all purchases</li>
+                    <li>1.2x loyalty points multiplier</li>
+                    <li>Free coffee on birthday</li>
+                  </>
+                )}
+                {approvalData.data.tier?.toLowerCase() === 'silver' && (
+                  <>
+                    <li>10% discount on all purchases</li>
+                    <li>1.5x loyalty points multiplier</li>
+                    <li>Free coffee on birthday</li>
+                    <li>One free pastry per month</li>
+                  </>
+                )}
+                {approvalData.data.tier?.toLowerCase() === 'gold' && (
+                  <>
+                    <li>15% discount on all purchases</li>
+                    <li>2x loyalty points multiplier</li>
+                    <li>Free coffee on birthday</li>
+                    <li>Two free pastries per month</li>
+                    <li>Priority pickup</li>
+                  </>
+                )}
+              </ul>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <button
+              onClick={handleReject}
+              disabled={loading}
+              className="flex-1 bg-red-500 text-white py-2 px-4 rounded hover:bg-red-600 disabled:opacity-50"
+            >
+              {loading ? 'Processing...' : 'Reject'}
+            </button>
+            <button
+              onClick={handleApprove}
+              disabled={loading}
+              className="flex-1 bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 disabled:opacity-50"
+            >
+              {loading ? 'Processing...' : 'Approve'}
+            </button>
+          </div>
         </div>
       </div>
     );

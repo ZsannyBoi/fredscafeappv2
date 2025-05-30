@@ -7,6 +7,8 @@ export interface User {
   avatar?: string; // Added for user avatar
   phone_number?: string; // Add phone_number to User interface
   address?: string; // Add address to User interface
+  membershipTier?: string; // Added for membership system
+  tierJoinDate?: string; // Date when user joined their current tier
 }
 
 // Interface for time-based reward availability
@@ -260,4 +262,10 @@ export interface EmployeeFormDetails {
   status: EmployeeData['status']; // Use the status type from EmployeeData
   hireDate?: string;
   role?: User['role']; // Added for managing user's system role
+}
+
+export interface Category {
+  category_id: number;
+  name: string;
+  image_url?: string;
 } 
