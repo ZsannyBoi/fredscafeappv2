@@ -19,21 +19,15 @@ const storage = multer.diskStorage({
     destination: async function (req, file, cb) {
         const uploadDir = path.join(__dirname, '..', 'uploads');
         try {
-            // Ensure the uploads directory exists
             await fs.mkdir(uploadDir, { recursive: true });
             cb(null, uploadDir);
         } catch (err) {
-            console.error('Error creating uploads directory:', err);
-            cb(err);
+            cb(err, null);
         }
     },
     filename: function (req, file, cb) {
-        // Create a unique filename to prevent collisions
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        // Get the original file extension
-        const ext = path.extname(file.originalname);
-        // Combine fieldname, timestamp, random number and extension
-        cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
     }
 });
 
@@ -65,38 +59,18 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 // --- Authentication Middleware ---
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Expecting "Bearer TOKEN"
+  const token = authHeader && authHeader.split(' ')[1];
 
-  console.log('[authenticateToken] Received headers:', req.headers); // Log headers
-  console.log('[authenticateToken] Extracted token:', token); // Log extracted token
-
-  if (token == null) {
-    console.log('[authenticateToken] Token is null, sending 401.');
-    return res.status(401).json({ message: 'Unauthorized' }); // Changed to JSON response
+  if (!token) {
+    return res.status(401).json({ message: 'Authentication token required' });
   }
 
-  const jwtSecret = process.env.JWT_SECRET;
-  if (!jwtSecret) {
-      console.error('[authenticateToken] JWT_SECRET is not defined!');
-      return res.status(500).json({ message: 'Internal server error: Auth configuration missing.' });
-  }
-
-  jwt.verify(token, jwtSecret, (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret', (err, user) => {
     if (err) {
-      console.log('[authenticateToken] JWT Verification Error:', err.message); // Log specific verify error
-      return res.status(403).json({ message: 'Forbidden' }); // Changed to JSON response
+      return res.status(403).json({ message: 'Invalid or expired token' });
     }
-    
-    // Ensure the user payload has the correct structure
-    if (!user || !user.userId) {
-      console.error('[authenticateToken] JWT payload missing required fields:', user);
-      return res.status(403).json({ message: 'Invalid token format' });
-    }
-    
-    // Token is valid, attach payload to request object
-    console.log('[authenticateToken] JWT verified successfully. User:', user);
-    req.user = user; 
-    next(); // Proceed to the next middleware or route handler
+    req.user = user;
+    next();
   });
 };
 
@@ -225,13 +199,15 @@ app.get('/api/auth/verify', authenticateToken, async (req, res) => {
                 role: fetchedUser.role,
                 avatar: fetchedUser.avatar_url || undefined,
                 referralCode: fetchedUser.referral_code || undefined,
-                phoneNumber: fetchedUser.phone_number || undefined,
-                address: fetchedUser.address || undefined
+                phone_number: fetchedUser.phone_number || undefined,
+                address: fetchedUser.address || undefined,
+                // Include other fields from User type if available in DB and needed
             }
         });
+
     } catch (error) {
-        console.error('[GET /api/auth/verify] Database error:', error);
-        res.status(500).json({ message: 'Failed to verify token and fetch user data.' });
+        console.error('[GET /api/auth/verify] Database error fetching user:', error);
+        res.status(500).json({ message: 'Error fetching user data', error: error.message });
     }
 });
 
@@ -1081,58 +1057,200 @@ app.post('/api/register', async (req, res) => {
 // POST /api/login - Log in a user
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-
+  
   if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required.' });
+    return res.status(400).json({ message: 'Email and password are required' });
   }
-
+  
   try {
-    // Find user by email (using the email column)
+    // Get user from database
     const [users] = await db.query('SELECT * FROM Users WHERE email = ?', [email]);
-
+    
     if (users.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password.' }); // Use generic message
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
-
+    
     const user = users[0];
-
-    // Compare submitted password with hashed password in database
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password.' });
+    
+    // Check password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
-
-    // --- Create JWT Payload ---
-    const payload = {
-        userId: user.user_id, // Use userId instead of user_id to match what authenticateToken expects
-        email: user.email, // Include email in the token payload
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user.user_id, 
+        email: user.email,
         role: user.role,
-        internalId: user.user_id.toString() // Add internalId to match what the frontend expects
-    };
-    // --- End Create JWT Payload ---
-
-    // Generate JWT
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' }); // Token expires in 1 hour
-
-    // Send the token and user information (excluding password hash) back to the client
+        internalId: user.user_id // Using user_id as internalId for consistency
+      }, 
+      process.env.JWT_SECRET || 'your_jwt_secret', 
+      { expiresIn: '24h' }
+    );
+    
+    // Return token and user info
     res.json({
       token,
       user: {
-        internalId: user.user_id.toString(), // Match the User type in frontend
+        internalId: user.user_id,
+        email: user.email,
         name: user.name,
-        email: user.email, // Ensure email is included here for frontend
         role: user.role,
-        avatar: user.avatar_url,
-        referralCode: user.referral_code, // Include referral code
-        phone_number: user.phone_number, // Include phone number
-        address: user.address // Include address if available
+        avatar: user.avatar,
+        referralCode: user.referral_code,
+        phone_number: user.phone_number,
+        address: user.address
       }
     });
-
+    
   } catch (error) {
-    console.error("Error logging in user:", error);
-    res.status(500).json({ message: 'Error logging in user', error: error.message });
+    console.error('Error during login:', error);
+    res.status(500).json({ message: 'Server error during login' });
+  }
+});
+
+// GET /api/auth/verify - Verify token and return user data
+app.get('/api/auth/verify', authenticateToken, async (req, res) => {
+  try {
+    // Get user data from database using user ID from token
+    const [users] = await db.query('SELECT * FROM Users WHERE user_id = ?', [req.user.userId]);
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = users[0];
+    
+    // Return user info
+    res.json({
+      user: {
+        internalId: user.user_id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        avatar: user.avatar,
+        referralCode: user.referral_code,
+        phone_number: user.phone_number,
+        address: user.address
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error verifying token:', error);
+    res.status(500).json({ message: 'Server error during token verification' });
+  }
+});
+
+// POST /api/auth/forgot-password - Initiate password reset process
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ message: 'Email is required' });
+  }
+  
+  try {
+    // Check if user exists
+    const [users] = await db.query('SELECT * FROM Users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      // Don't reveal that the email doesn't exist for security reasons
+      return res.status(200).json({ message: 'If your email is in our system, you will receive a password reset link' });
+    }
+    
+    const user = users[0];
+    
+    // Generate a reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = await bcrypt.hash(resetToken, 10);
+    
+    // Store the token in the database with expiration time (1 hour)
+    const expiryTime = new Date();
+    expiryTime.setHours(expiryTime.getHours() + 1);
+    
+    // Check if a reset token already exists for this user
+    const [existingTokens] = await db.query('SELECT * FROM PasswordResetTokens WHERE user_id = ?', [user.user_id]);
+    
+    if (existingTokens.length > 0) {
+      // Update existing token
+      await db.query(
+        'UPDATE PasswordResetTokens SET token = ?, expires_at = ? WHERE user_id = ?',
+        [hashedToken, expiryTime, user.user_id]
+      );
+    } else {
+      // Create new token record
+      await db.query(
+        'INSERT INTO PasswordResetTokens (user_id, token, expires_at) VALUES (?, ?, ?)',
+        [user.user_id, hashedToken, expiryTime]
+      );
+    }
+    
+    // In a real application, send an email with the reset link
+    // For this demo, we'll just return the token
+    console.log(`Password reset token for ${email}: ${resetToken}`);
+    
+    // Return success message
+    res.json({ 
+      message: 'Password reset initiated. Check your email for instructions.',
+      // In a development environment, return the token for testing
+      ...(process.env.NODE_ENV === 'development' && { resetToken })
+    });
+    
+  } catch (error) {
+    console.error('Error initiating password reset:', error);
+    res.status(500).json({ message: 'Server error during password reset initiation' });
+  }
+});
+
+// POST /api/auth/reset-password - Complete password reset process
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, newPassword } = req.body;
+  
+  if (!token || !newPassword) {
+    return res.status(400).json({ message: 'Token and new password are required' });
+  }
+  
+  try {
+    // Find the token in the database
+    const [tokenRecords] = await db.query(
+      'SELECT * FROM PasswordResetTokens WHERE expires_at > NOW()'
+    );
+    
+    let validToken = false;
+    let userId;
+    
+    // Check each token by comparing with bcrypt
+    for (const record of tokenRecords) {
+      const isValid = await bcrypt.compare(token, record.token);
+      if (isValid) {
+        validToken = true;
+        userId = record.user_id;
+        break;
+      }
+    }
+    
+    if (!validToken || !userId) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    // Update the user's password
+    await db.query('UPDATE Users SET password = ? WHERE user_id = ?', [hashedPassword, userId]);
+    
+    // Remove the used token
+    await db.query('DELETE FROM PasswordResetTokens WHERE user_id = ?', [userId]);
+    
+    // Return success message
+    res.json({ message: 'Password reset successful. You can now log in with your new password.' });
+    
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ message: 'Server error during password reset' });
   }
 });
 
@@ -1255,7 +1373,6 @@ app.get('/api/orders/customer/:customerId', authenticateToken, async (req, res) 
         total_amount AS total,
         status,
         order_timestamp AS timestamp,
-        updated_at,
         ticket_number
       FROM Orders
       WHERE customer_id = ?
@@ -1347,7 +1464,6 @@ app.get('/api/orders/customer/:customerId', authenticateToken, async (req, res) 
         status: order.status,
         timestamp: order.timestamp,
         ticketNumber: order.ticket_number,
-        updatedAt: order.updated_at, // Include the updated_at field
       };
     });
 
@@ -1376,7 +1492,6 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
         total_amount AS total,
         status,
         order_timestamp AS timestamp,
-        updated_at,
         ticket_number
       FROM Orders
       WHERE is_archived = FALSE
@@ -1468,7 +1583,6 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
         status: order.status,
         timestamp: order.timestamp, // Ensure format matches frontend expectation if needed
         ticketNumber: order.ticket_number,
-        updatedAt: order.updated_at, // Include the updated_at field
       };
     });
 
@@ -3070,9 +3184,9 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
 
   console.log('[Backend POST /api/employees] Received request body:', JSON.stringify(req.body, null, 2));
 
-  const { userEmail, employeeIdCode, position, status: requestStatus, hireDate, role: newRole } = req.body;
+  const { userEmail, employeeIdCode, position, status: requestStatus, phone, hireDate, role: newRole } = req.body;
 
-  console.log('[Backend POST /api/employees] Destructured values:', { userEmail, employeeIdCode, position, status: requestStatus, hireDate, role: newRole });
+  console.log('[Backend POST /api/employees] Destructured values:', { userEmail, employeeIdCode, position, status: requestStatus, phone, hireDate, role: newRole });
 
   if (!userEmail || !employeeIdCode || !position) {
     console.log('[Backend POST /api/employees] Core validation failed. Values:', { userEmail: !!userEmail, employeeIdCode: !!employeeIdCode, position: !!position });
@@ -3113,6 +3227,7 @@ app.post('/api/employees', authenticateToken, async (req, res) => {
     }
 
     const finalStatus = requestStatus || 'Active';
+    const finalPhone = phone?.trim() || null;
     const finalHireDate = hireDate ? new Date(hireDate).toISOString().slice(0, 19).replace('T', ' ') : new Date().toISOString().slice(0, 19).replace('T', ' ');
     const finalRole = newRole || 'employee'; 
 
@@ -3185,11 +3300,11 @@ app.put('/api/employees/:employeeInternalId', authenticateToken, async (req, res
   }
 
   const { employeeInternalId } = req.params;
-  const { employeeIdCode, position, status, hireDate, role: newRole } = req.body;
+  const { employeeIdCode, position, status, phone_number, hireDate, role: newRole } = req.body;
 
   console.log(`[Backend PUT /api/employees/${employeeInternalId}] Received body:`, JSON.stringify(req.body, null, 2));
 
-  if (!employeeIdCode && !position && !status && hireDate === undefined && !newRole) {
+  if (!employeeIdCode && !position && !status && phone_number === undefined && hireDate === undefined && !newRole) {
     return res.status(400).json({ message: 'No update information provided.' });
   }
   if (newRole && !['manager', 'employee', 'cashier', 'cook', 'customer'].includes(newRole)) {
@@ -3251,17 +3366,22 @@ app.put('/api/employees/:employeeInternalId', authenticateToken, async (req, res
       await connection.query(updateEmployeedetailsSQL, params);
     }
 
-    // Update role in the users table if provided
-    if (newRole) {
+    // Update phone_number in the users table if provided
+    // Check if phone_number was explicitly included in the request body (allowing null/empty string)
+    if (req.body.hasOwnProperty('phone_number')) {
+      console.log(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Checking for phone_number update.`);
       const userIdToUpdate = currentEmployee.user_id; // Get user_id from the fetched employee record
+      console.log(`[Backend PUT /api/employees/${req.params.employeeInternalId}] userIdToUpdate for phone_number:`, userIdToUpdate);
       if (userIdToUpdate) {
-        await connection.query('UPDATE users SET role = ? WHERE user_id = ?', [newRole, userIdToUpdate]);
+        console.log(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Updating user ${userIdToUpdate} phone_number`);
+        // Use req.body.phone_number, converting empty string to null for DB if needed
+        await connection.query('UPDATE users SET phone_number = ? WHERE user_id = ?', [req.body.phone_number || null, userIdToUpdate]);
       } else {
-        console.warn(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Cannot update role, user_id not found for employee.`);
+        console.warn(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Cannot update phone_number, user_id not found for employee.`);
       }
     }
 
-    if (setClauses.length === 0 && !newRole) {
+    if (setClauses.length === 0) {
         // This case should ideally be caught by the initial check for no update info, but as a safeguard within transaction:
         await connection.rollback();
         connection.release();
@@ -3270,29 +3390,29 @@ app.put('/api/employees/:employeeInternalId', authenticateToken, async (req, res
 
     await connection.commit();
 
-    // Fetch the updated employee record to return in the response
+    // Fetch the updated employee details to return
     const [updatedEmployeeArr] = await connection.query(
       `SELECT ed.employee_internal_id, ed.employee_id_code, ed.position, ed.status, u.phone_number, ed.hire_date, u.email, u.name AS employeeName, u.role AS user_role
-       FROM employeedetails ed
-       JOIN users u ON ed.user_id = u.user_id
+       FROM employeedetails ed JOIN users u ON ed.user_id = u.user_id
        WHERE ed.employee_internal_id = ?`,
       [employeeInternalId]
     );
     
-    connection.release(); // Release connection after successful operation and fetch
+    connection.release();
 
     if (updatedEmployeeArr.length === 0) {
-        return res.status(500).json({ message: "Failed to retrieve updated employee details after update." });
+        return res.status(404).json({ message: "Employee not found after update attempt (should not happen if initial check passed)." });
     }
-    
-    res.status(200).json(updatedEmployeeArr[0]);
+
+    res.json(updatedEmployeeArr[0]);
 
   } catch (error) {
     if (connection) {
-        try { await connection.rollback(); } catch (rbError) { console.error("[Backend PUT /api/employees] Rollback error", rbError); }
-        try { connection.release(); } catch (relError) { console.error("[Backend PUT /api/employees] Release error", relError); }
+        try { await connection.rollback(); } catch (rbError) { console.error(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Rollback error`, rbError); }
+        try { connection.release(); } catch (relError) { console.error(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Release error`, relError); }
     }
-    console.error('[Backend PUT /api/employees] Error:', error); // Log the full error on the server
+    console.error(`[Backend PUT /api/employees/${req.params.employeeInternalId}] Error:`, error); // Log full error
+    // Specific conflict errors (like employeeIdCode) are handled by pre-checks.
     res.status(500).json({ message: 'An unexpected error occurred while updating the employee.' });
   }
 });
@@ -3424,11 +3544,13 @@ app.delete('/api/products/:productId', authenticateToken, async (req, res) => {
 app.get('/api/users/:userId', authenticateToken, async (req, res) => {
   const requestedUserId = req.params.userId; // User ID from the URL parameter
   const authenticatedUserDbId = req.user.userId; // User ID from the authenticated token
+  const authenticatedUserInternalId = req.user.internalId; // Internal ID from the token
   const authenticatedUserRole = req.user.role; // Role from the authenticated token
 
   // Modified to allow all authenticated staff to view any customer profile
   // Only customers are restricted to viewing their own profiles
-  const isOwnProfile = String(authenticatedUserDbId) === requestedUserId;
+  const isOwnProfile = String(authenticatedUserDbId) === String(requestedUserId) || 
+                       String(authenticatedUserInternalId) === String(requestedUserId);
   
   if (authenticatedUserRole === 'customer' && !isOwnProfile) {
     // Customers can only view their own profiles
@@ -3640,7 +3762,10 @@ app.put('/api/categories/:id', authenticateToken, upload.single('image'), async 
 // GET /api/rewards/available/:customerId - Get rewards available to a specific customer
 app.get('/api/rewards/available/:customerId', authenticateToken, async (req, res) => {
   // Verify access: Either it's the user's own rewards or an employee/manager
-  if (req.user.role !== 'manager' && req.user.role !== 'employee' && req.user.internalId !== req.params.customerId) {
+  if (req.user.role !== 'manager' && 
+      req.user.role !== 'employee' && 
+      String(req.user.userId) !== String(req.params.customerId) &&
+      String(req.user.internalId) !== String(req.params.customerId)) {
     return res.status(403).json({ message: 'Unauthorized to view these rewards' });
   }
 
@@ -3662,223 +3787,6 @@ app.get('/api/rewards/available/:customerId', authenticateToken, async (req, res
     
     const customer = customerRows[0];
     
-    // 2. Get active vouchers for this customer
-    const [voucherRows] = await connection.execute(
-      `SELECT 
-        v.voucher_id AS instanceId, 
-        v.status,
-        v.expiry_date AS expiryDate,
-        r.reward_id AS id,
-        r.name,
-        r.description,
-        r.image_url AS image,
-        r.type,
-        r.points_cost AS pointsCost,
-        r.discount_percentage AS discountPercentage,
-        r.discount_fixed_amount AS discountFixedAmount,
-        GROUP_CONCAT(DISTINCT rfmi.product_id) AS product_ids
-      FROM customer_vouchers v
-      JOIN rewards r ON v.reward_id = r.reward_id
-      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
-      WHERE v.customer_id = ? AND v.status = 'active'
-      GROUP BY v.voucher_id, v.status, v.expiry_date, r.reward_id, r.name, r.description, r.image_url, r.type, r.points_cost, r.discount_percentage, r.discount_fixed_amount`,
-      [customerId]
-    );
-    
-    const formattedVouchers = voucherRows
-      // Filter out vouchers that have already been redeemed
-      .filter(voucher => !redeemedVoucherIds.has(voucher.instanceId))
-      .map(voucher => ({
-        id: voucher.id,
-        name: voucher.name,
-        description: voucher.description,
-        image: voucher.image,
-        type: voucher.type,
-        pointsCost: voucher.pointsCost ? parseFloat(voucher.pointsCost) : undefined,
-        discountPercentage: voucher.discountPercentage ? parseFloat(voucher.discountPercentage) : undefined,
-        discountFixedAmount: voucher.discountFixedAmount ? parseFloat(voucher.discountFixedAmount) : undefined,
-        freeMenuItemIds: voucher.product_ids ? voucher.product_ids.split(',') : [],
-        isVoucher: true,
-        instanceId: voucher.instanceId,
-        expiryDate: voucher.expiryDate ? new Date(voucher.expiryDate).toISOString().split('T')[0] : undefined,
-        isClaimed: true, 
-        isEligible: true // Vouchers are always eligible to be used once claimed
-      }));
-    
-    // 3. Fetch standard rewards and check eligibility
-    const rewardsSql = `
-      SELECT 
-        r.reward_id AS id,
-        r.name,
-        r.description,
-        r.image_url AS image,
-        r.type,
-        r.criteria_json AS criteria,
-        r.points_cost AS pointsCost,
-        r.discount_percentage AS discountPercentage,
-        r.discount_fixed_amount AS discountFixedAmount,
-        cv.expiry_date AS expiryDate,
-        GROUP_CONCAT(DISTINCT rfmi.product_id) AS product_ids
-      FROM rewards r
-      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
-      WHERE r.type IN ('standard', 'discount_coupon', 'voucher')
-      GROUP BY r.reward_id, r.name, r.description, r.image_url, r.type, r.points_cost, r.discount_percentage, r.discount_fixed_amount, cv.expiry_date
-    `;
-    
-    const [rewardRows] = await connection.query(rewardsSql);
-    
-    // 4. Fetch claimed general rewards
-    const [claimedRewardsRows] = await connection.execute(
-      'SELECT reward_id FROM customer_claimed_rewards WHERE customer_id = ?',
-      [customerId]
-    );
-    
-    const claimedRewardIds = new Set(claimedRewardsRows.map(row => row.reward_id));
-    
-    // 5. Fetch already used/redeemed rewards to filter them out
-    const [redeemedRewardsRows] = await connection.execute(
-      `SELECT DISTINCT ru.reward_id, ru.free_items_json
-       FROM reward_usage ru
-       JOIN orders o ON ru.order_id = o.order_id
-       WHERE o.user_id = ?`,
-      [customerId]
-    );
-    
-    // Extract voucher IDs from free_items_json for tracking redeemed vouchers
-    const redeemedVoucherIds = new Set();
-    redeemedRewardsRows.forEach(row => {
-      if (row.free_items_json) {
-        try {
-          const jsonData = JSON.parse(row.free_items_json);
-          if (jsonData && jsonData.voucherId) {
-            redeemedVoucherIds.add(jsonData.voucherId);
-          }
-        } catch (e) {
-          console.error('Error parsing free_items_json for voucher ID:', e);
-        }
-      }
-    });
-    
-    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
-    
-    // 5. Get customer stats for eligibility checks
-    const now = new Date();
-    const birthDate = customer.birth_date ? new Date(customer.birth_date) : null;
-    const currentMonth = now.getMonth();
-    const currentDay = now.getDate();
-    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5); // HH:MM
-    const currentDayOfWeek = now.getDay();
-
-    // Format and filter standard rewards - DO NOT FILTER OUT INELIGIBLE REWARDS
-    const formattedStandardRewards = rewardRows
-      .filter(reward => !redeemedRewardIds.has(reward.id)) // Filter out already redeemed rewards
-      .map(reward => {
-        // Check if already claimed (for non-voucher types)
-        const isClaimed = claimedRewardIds.has(reward.id) && reward.type !== 'voucher';
-        
-        // Parse criteria and check eligibility
-        let isEligible = true;
-        let ineligibilityReason = '';
-        let parsedCriteria = {};
-        
-        if (reward.criteria && !isClaimed) { // No need to check eligibility for already claimed rewards
-          try {
-            parsedCriteria = safeJsonParse(reward.criteria, {});
-            // Perform eligibility checks here
-            // This would normally be complex logic based on customer data
-            // Simple example: check if points requirement is met
-            if (parsedCriteria.minPoints && customer.loyalty_points < parsedCriteria.minPoints) {
-              isEligible = false;
-              ineligibilityReason = `Requires ${parsedCriteria.minPoints} loyalty points (you have ${customer.loyalty_points})`;
-            }
-            
-            // Birthday check
-            if (isEligible && parsedCriteria.isBirthdayOnly && birthDate) {
-              const birthMonth = birthDate.getMonth();
-              const birthDay = birthDate.getDate();
-              
-              if (birthMonth !== currentMonth || birthDay !== currentDay) {
-                isEligible = false;
-                ineligibilityReason = "Only available on your birthday";
-              }
-            }
-            
-            // Birth month check
-            if (isEligible && parsedCriteria.isBirthMonthOnly && birthDate) {
-              const birthMonth = birthDate.getMonth();
-              
-              if (birthMonth !== currentMonth) {
-                isEligible = false;
-                ineligibilityReason = "Only available during your birth month";
-              }
-            }
-            
-            // Implement other criteria checks as needed...
-          } catch (e) {
-            console.error('Error parsing criteria_json', e, reward.criteria);
-          }
-        }
-        
-        // Return reward with eligibility flag instead of filtering out
-        return {
-          id: reward.id,
-          name: reward.name,
-          description: reward.description,
-          image: reward.image,
-          type: reward.type,
-          pointsCost: reward.pointsCost ? parseFloat(reward.pointsCost) : undefined,
-          discountPercentage: reward.discountPercentage ? parseFloat(reward.discountPercentage) : undefined,
-          discountFixedAmount: reward.discountFixedAmount ? parseFloat(reward.discountFixedAmount) : undefined,
-          freeMenuItemIds: reward.product_ids ? reward.product_ids.split(',') : [],
-          isVoucher: false,
-          isClaimed: isClaimed,
-          isEligible: isClaimed || isEligible, // Claimed rewards are always "eligible" to be used
-          ineligibilityReason: ineligibilityReason
-        };
-      });
-    
-    // Combine both types of rewards
-    const allAvailableRewards = [...formattedVouchers, ...formattedStandardRewards];
-    
-    res.json(allAvailableRewards);
-    
-  } catch (error) {
-    console.error('Error getting available rewards for customer:', error);
-    res.status(500).json({ message: 'Error fetching rewards', error: error.message });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
-// User search endpoint moved to top of file
-
-// GET /api/rewards/available - Get all available rewards for a customer
-app.get('/api/rewards/available', authenticateToken, async (req, res) => {
-  // First try to get customer ID from internalId, then fall back to userId
-  const customerId = req.user.internalId || String(req.user.userId);
-  if (!customerId) {
-    // This should ideally be caught by authenticateToken if userId is essential
-    return res.status(400).json({ message: "Customer ID not found in token." });
-  }
-  console.log(`[GET /api/rewards/available] Using customer ID: ${customerId} from token:`, req.user);
-  
-  let connection;
-
-  try {
-    connection = await db.getConnection();
-    
-    // First get the customer data needed for eligibility checks
-    const [customerRows] = await connection.execute(
-      'SELECT * FROM Users WHERE user_id = ? AND role = "customer"',
-      [customerId]
-    );
-    
-    if (customerRows.length === 0) {
-      return res.status(404).json({ message: 'Customer not found' });
-    }
-    
-    const customer = customerRows[0];
-    
     // Get customer's claimed rewards
     const [claimedRewardsRows] = await connection.query(
       'SELECT reward_id FROM customer_claimed_rewards WHERE customer_id = ?',
@@ -3886,6 +3794,7 @@ app.get('/api/rewards/available', authenticateToken, async (req, res) => {
     );
     
     const claimedRewardIds = new Set(claimedRewardsRows.map(row => row.reward_id));
+    console.log(`[GET /api/rewards/available/${customerId}] Customer has ${claimedRewardIds.size} claimed rewards`);
     
     // Get already redeemed rewards to filter them out
     const [redeemedRewardsRows] = await connection.execute(
@@ -3897,193 +3806,321 @@ app.get('/api/rewards/available', authenticateToken, async (req, res) => {
     );
     
     // Extract voucher IDs from free_items_json for tracking redeemed vouchers
+    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
     const redeemedVoucherIds = new Set();
     redeemedRewardsRows.forEach(row => {
-      if (row.free_items_json) {
-        try {
-          const jsonData = JSON.parse(row.free_items_json);
-          if (jsonData && jsonData.voucherId) {
-            redeemedVoucherIds.add(jsonData.voucherId);
+      try {
+        if (row.free_items_json) {
+          const freeItems = JSON.parse(row.free_items_json);
+          if (freeItems && freeItems.voucherId) {
+            redeemedVoucherIds.add(freeItems.voucherId);
           }
-        } catch (e) {
-          console.error('Error parsing free_items_json for voucher ID:', e);
         }
+      } catch (err) {
+        console.error("Error parsing free_items_json:", err);
       }
     });
+
+    // Get the customer's points for points-based reward eligibility
+    const customerPoints = customer.loyalty_points || 0;
     
-    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
+    // Get the customer's tier for tier-based reward eligibility
+    const customerTier = customer.membership_tier || null;
     
-    // Get all potentially available rewards
-    const availableRewardsSql = `
-      SELECT 
-        r.reward_id AS id,
-        r.name,
-        r.description,
-        r.image_url AS image,
-        r.type,
-        r.criteria_json AS criteria,
-        r.points_cost AS pointsCost,
-        r.discount_percentage AS discountPercentage,
-        r.discount_fixed_amount AS discountFixedAmount,
-        GROUP_CONCAT(DISTINCT rfmi.product_id) AS product_ids
-      FROM Rewards r
-      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
-      WHERE (r.type = 'standard' OR r.type = 'discount_coupon' OR r.type = 'voucher')
-      GROUP BY r.reward_id, r.name, r.description, r.image_url, r.type, r.criteria_json, r.points_cost, r.discount_percentage, r.discount_fixed_amount
-      ORDER BY r.name
-    `;
+    // Get current date for date-based reward eligibility
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const currentMonth = today.getMonth() + 1; // 1-12
+    const currentDay = today.getDate();
+    const currentDayOfWeek = today.getDay(); // 0-6 (Sunday-Saturday)
+    const currentHour = today.getHours();
+    const currentMinute = today.getMinutes();
+    const currentTime = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`; // HH:MM
     
-    const [availableRewardsRows] = await connection.query(availableRewardsSql);
+    // Get purchase counts for purchase-based reward eligibility
+    const [purchaseCountResult] = await connection.execute(
+      `SELECT COUNT(*) as count 
+       FROM orders 
+       WHERE customer_id = ? 
+       AND status = 'completed' 
+       AND DATE_FORMAT(order_timestamp, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')`,
+      [customerId]
+    );
     
-    // 4. Get customer stats for eligibility checks
-    const now = new Date();
-    const birthDate = customer.birth_date ? new Date(customer.birth_date) : null;
-    const currentMonth = now.getMonth();
-    const currentDay = now.getDate();
-    const currentTime = now.toTimeString().split(' ')[0].substring(0, 5); // HH:MM
-    const currentDayOfWeek = now.getDay();
+    const purchasesThisMonth = purchaseCountResult[0]?.count || 0;
     
-    // 5. Process each reward for eligibility
+    // Get total spend for spend-based reward eligibility
+    const [totalSpendResult] = await connection.execute(
+      `SELECT SUM(total_amount) as total_spend 
+       FROM orders 
+       WHERE customer_id = ? 
+       AND status = 'completed'`,
+      [customerId]
+    );
+    
+    const lifetimeTotalSpend = totalSpendResult[0]?.total_spend || 0;
+    
+    // Get customer birthdate for birthday-based reward eligibility
+    const customerBirthDate = customer.birth_date;
+    let customerBirthMonth = null;
+    let customerBirthDay = null;
+    
+    if (customerBirthDate) {
+      const birthDate = new Date(customerBirthDate);
+      customerBirthMonth = birthDate.getMonth() + 1; // 1-12
+      customerBirthDay = birthDate.getDate();
+    }
+    
+    // Get customer join date for new-signup reward eligibility
+    const customerJoinDate = customer.join_date ? new Date(customer.join_date) : null;
+    const joinDateStr = customerJoinDate ? customerJoinDate.toISOString().split('T')[0] : null;
+    const isNewCustomer = joinDateStr && 
+      ((new Date(todayStr).getTime() - new Date(joinDateStr).getTime()) / (1000 * 3600 * 24) <= 7); // Within 7 days
+    
+    // Get referral count for referral-based reward eligibility
+    const referralsMade = customer.referrals_made || 0;
+    
+    // Now get all available rewards
+    const [availableRewardsRows] = await connection.execute(
+      `SELECT 
+         r.reward_id, 
+         r.name, 
+         r.description, 
+         r.image_url, 
+         r.type, 
+         r.points_cost, 
+         r.criteria_json,
+         r.earning_hint,
+         r.discount_percentage,
+         r.discount_fixed_amount,
+         r.allow_multiple_claims,
+         GROUP_CONCAT(rfmi.product_id) as free_menu_item_ids
+       FROM rewards r
+       LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
+       WHERE r.is_active = 1
+       GROUP BY r.reward_id, r.name, r.description, r.image_url, r.type, r.points_cost, r.criteria_json, r.earning_hint, r.discount_percentage, r.discount_fixed_amount, r.allow_multiple_claims`
+    );
+    
+    // Format rewards and check eligibility for each
     const formattedRewards = availableRewardsRows.map(reward => {
-        // Check if already claimed (for non-voucher types)
-        const isClaimed = claimedRewardIds.has(reward.id);
-        
-        // Default to eligible
+      // Skip rewards that have been redeemed and are not allowed multiple claims
+      if (redeemedRewardIds.has(reward.reward_id) && reward.allow_multiple_claims !== 1 && reward.type !== 'voucher') {
+        console.log(`Skipping already redeemed reward: ${reward.reward_id}`);
+        return null;
+      }
+      
+      // Skip rewards that are single-use and already claimed (except vouchers)
+      if (reward.allow_multiple_claims !== 1 && 
+          claimedRewardIds.has(reward.reward_id) && 
+          reward.type !== 'voucher') {
+        console.log(`Skipping already claimed reward: ${reward.reward_id}`);
+        return null;
+      }
+
+      // Parse criteria if it exists
+      let criteria = null;
+      if (reward.criteria_json) {
+        try {
+          criteria = JSON.parse(reward.criteria_json);
+        } catch (err) {
+          console.error(`Error parsing criteria for reward ${reward.reward_id}:`, err);
+          criteria = {};
+        }
+      } else {
+        criteria = {};
+      }
+
+      // Parse free menu items if they exist
+      const freeMenuItemIds = reward.free_menu_item_ids ? reward.free_menu_item_ids.split(',') : [];
+      
+      // Check if already claimed
+      const isClaimed = claimedRewardIds.has(reward.reward_id);
+      
+      // Determine eligibility based on criteria
         let isEligible = true;
-        let ineligibilityReason = '';
+      let ineligibilityReason = '';
+      
+      // Only check eligibility if not already claimed
+      if (!isClaimed) {
+        // Points check
+        if (criteria.minPoints && customerPoints < criteria.minPoints) {
+          isEligible = false;
+          ineligibilityReason = `Requires ${criteria.minPoints} points (you have ${customerPoints})`;
+        }
         
-        // Check criteria if available
-        if (reward.criteria) {
-          try {
-            // Parse criteria JSON
-            const parsedCriteria = safeJsonParse(reward.criteria);
-            
-            // Check if allow_multiple_claims is false and already claimed
-            if (!parsedCriteria.allow_multiple_claims && isClaimed) {
+        // Purchase count check
+        if (isEligible && criteria.minPurchasesMonthly && purchasesThisMonth < criteria.minPurchasesMonthly) {
               isEligible = false;
-              ineligibilityReason = 'Already claimed';
-              return null; // Skip this reward
+          ineligibilityReason = `Requires ${criteria.minPurchasesMonthly} purchases this month (you have ${purchasesThisMonth})`;
             }
             
-            // Points requirement check
-            if (isEligible && parsedCriteria.requiredPoints && parsedCriteria.requiredPoints > customer.loyalty_points) {
-              isEligible = false;
-              ineligibilityReason = `Requires ${parsedCriteria.requiredPoints} points`;
+            // Birthday check
+        if (isEligible && criteria.isBirthdayOnly && (customerBirthMonth !== currentMonth || customerBirthDay !== currentDay)) {
+                isEligible = false;
+                ineligibilityReason = "Only available on your birthday";
             }
             
-            // Membership tier check
-            if (isEligible && parsedCriteria.requiredTier && 
-                (!customer.membership_tier || 
-                 customer.membership_tier.toLowerCase() !== parsedCriteria.requiredTier.toLowerCase())) {
-              isEligible = false;
-              ineligibilityReason = `Requires ${parsedCriteria.requiredTier} membership`;
+            // Birth month check
+        if (isEligible && criteria.isBirthMonthOnly && customerBirthMonth !== currentMonth) {
+                isEligible = false;
+                ineligibilityReason = "Only available during your birth month";
             }
             
             // Date range check
-            if (isEligible && parsedCriteria.validDateRange) {
-              const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
-              
-              if (parsedCriteria.validDateRange.startDate && todayStr < parsedCriteria.validDateRange.startDate) {
-                isEligible = false;
-                ineligibilityReason = `Available starting ${parsedCriteria.validDateRange.startDate}`;
-              }
-              if (parsedCriteria.validDateRange.endDate && todayStr > parsedCriteria.validDateRange.endDate) {
-                isEligible = false;
-                ineligibilityReason = `Expired on ${parsedCriteria.validDateRange.endDate}`;
-              }
-            }
-            
-          } catch (e) {
-            console.error('Error parsing criteria_json', e, reward.criteria);
+        if (isEligible && criteria.validDateRange) {
+          if (criteria.validDateRange.startDate && todayStr < criteria.validDateRange.startDate) {
+            isEligible = false;
+            ineligibilityReason = `Available starting ${criteria.validDateRange.startDate}`;
+          }
+          if (isEligible && criteria.validDateRange.endDate && todayStr > criteria.validDateRange.endDate) {
+            isEligible = false;
+            ineligibilityReason = `Expired on ${criteria.validDateRange.endDate}`;
           }
         }
         
+        // Membership tier check
+        if (isEligible && criteria.requiredCustomerTier && criteria.requiredCustomerTier.length > 0) {
+          if (!customerTier || !criteria.requiredCustomerTier.includes(customerTier)) {
+                isEligible = false;
+            ineligibilityReason = `Requires ${criteria.requiredCustomerTier.join(' or ')} tier`;
+              }
+        }
+        
+        // Referral check
+        if (isEligible && criteria.minReferrals && referralsMade < criteria.minReferrals) {
+                isEligible = false;
+          ineligibilityReason = `Requires ${criteria.minReferrals} referrals (you have ${referralsMade})`;
+        }
+        
+        // Sign-up bonus check
+        if (isEligible && criteria.isSignUpBonus && !isNewCustomer) {
+          isEligible = false;
+          ineligibilityReason = "Only for new customers";
+        }
+        
+        // Time window check
+        if (isEligible && criteria.activeTimeWindows && criteria.activeTimeWindows.length > 0) {
+          const isInTimeWindow = criteria.activeTimeWindows.some(window => {
+            const isDayValid = !window.daysOfWeek || window.daysOfWeek.includes(currentDayOfWeek);
+            const isTimeValid = currentTime >= window.startTime && currentTime <= window.endTime;
+            return isDayValid && isTimeValid;
+          });
+          
+          if (!isInTimeWindow) {
+            isEligible = false;
+            ineligibilityReason = "Only available during specific times/days";
+          }
+        }
+        
+        // Cumulative spend check
+        if (isEligible && criteria.cumulativeSpendTotal && lifetimeTotalSpend < criteria.cumulativeSpendTotal) {
+          isEligible = false;
+          ineligibilityReason = `Requires total spend of $${criteria.cumulativeSpendTotal.toFixed(2)} (you have $${lifetimeTotalSpend.toFixed(2)})`;
+        }
+      }
+      
+      // Return formatted reward with eligibility info
         return {
-          id: reward.id,
+        id: reward.reward_id,
           name: reward.name,
           description: reward.description,
-          image: reward.image,
+        image: reward.image_url,
           type: reward.type,
-          pointsCost: reward.pointsCost ? parseFloat(reward.pointsCost) : undefined,
-          discountPercentage: reward.discountPercentage ? parseFloat(reward.discountPercentage) : undefined,
-          discountFixedAmount: reward.discountFixedAmount ? parseFloat(reward.discountFixedAmount) : undefined,
-          freeMenuItemIds: reward.product_ids ? reward.product_ids.split(',') : [],
-          isVoucher: reward.type === 'voucher',
-          isClaimed: isClaimed,
-          isEligible: isClaimed || isEligible, // Claimed rewards are always "eligible" to be shown
-          ineligibilityReason: ineligibilityReason // Reason for ineligibility if not eligible
-        };
-      }).filter(reward => reward !== null); // Filter out null entries (rewards that were skipped)
+        pointsCost: reward.points_cost,
+        discountPercentage: reward.discount_percentage,
+        discountFixedAmount: reward.discount_fixed_amount,
+        freeMenuItemIds,
+        isClaimed,
+        isEligible,
+        ineligibilityReason,
+        earningHint: reward.earning_hint,
+        allowMultipleClaims: reward.allow_multiple_claims === 1
+      };
+    }).filter(reward => reward !== null); // Filter out null entries (rewards that were skipped)
     
-    res.json(formattedRewards);
+    // Filter rewards based on eligibility and claim status
+    // For staff users (managers/employees), show all rewards to allow them to see what's available
+    // For customers, filter to only show eligible or claimed rewards
+    const isStaffUser = req.user.role === 'manager' || req.user.role === 'employee';
+    
+    const filteredRewards = formattedRewards.filter(reward => {
+      // Staff can see all rewards
+      if (isStaffUser) return true;
+      
+      // Always include claimed rewards
+      if (reward.isClaimed) return true;
+      
+      // For unclaimed rewards, only include them if they're eligible
+      return reward.isEligible;
+    });
+    
+    console.log(`[GET /api/rewards/available/${customerId}] Returning ${filteredRewards.length} rewards: ${filteredRewards.map(r => r.name).join(', ')}`);
+    res.json(filteredRewards);
     
   } catch (error) {
-    console.error('Error fetching available rewards:', error);
+    console.error(`Error fetching available rewards for customer ${customerId}:`, error);
     res.status(500).json({ message: 'Error fetching available rewards', error: error.message });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// --- Helper functions for image handling
-
-// --- End Available Rewards Route ---
-
-// GET /api/rewards/checkout - Get rewards available during checkout (simplified)
-app.get('/api/rewards/checkout', authenticateToken, async (req, res) => {
-  // Allow access for all authenticated users (customers, cashiers, managers, etc.)
-  // This enables testing by staff and viewing by cashiers during checkout
-
-  // For non-customers, we'll still show rewards but they won't be claimable
-  // Make sure we have a valid customer ID
-  const customerId = req.user && req.user.userId ? req.user.userId : null;
+// GET /api/rewards/available - Get all available rewards for a customer
+app.get('/api/rewards/available', authenticateToken, async (req, res) => {
+  // First try to get customer ID from internalId, then fall back to userId
+  const customerId = req.user.internalId || String(req.user.userId);
+  if (!customerId) {
+    // This should ideally be caught by authenticateToken if userId is essential
+    return res.status(400).json({ message: "Customer ID not found in token." });
+  }
+  console.log(`[GET /api/rewards/claimed-only] Using customer ID: ${customerId}`);
 
   let connection;
   try {
     connection = await db.getConnection();
 
-    // Get already redeemed rewards to filter them out
-    let redeemedRewardIds = new Set();
-    if (customerId) {
+    // First check if this is a customer
+    const [customerRows] = await connection.execute(
+      'SELECT * FROM Users WHERE user_id = ? AND role = "customer"',
+      [customerId]
+    );
+    
+    if (customerRows.length === 0) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+    
+    // Get redeemed rewards to filter them out
       const [redeemedRewardsRows] = await connection.execute(
         `SELECT DISTINCT ru.reward_id 
          FROM reward_usage ru
          JOIN orders o ON ru.order_id = o.order_id
-         WHERE o.user_id = ?`,
+       WHERE o.customer_id = ?`,
         [customerId]
       );
       
-      redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
-    }
-
-    // 1. Get basic rewards for display in checkout (simplified)
-    let allRewards = [];
-    try {
-      [allRewards] = await connection.execute(
-        `SELECT reward_id, name, description, image_url, type, 
-                points_cost, discount_percentage, discount_fixed_amount
-         FROM rewards 
-         WHERE (type = 'discount_coupon' OR type = 'voucher' OR type = 'standard')
-         ORDER BY name`
-      );
-    } catch (error) {
-      console.log("No rewards found:", error.message);
-      allRewards = [];
-    }
-
-    // 2. Process rewards for checkout display (minimal processing)
-    const checkoutRewards = [];
+    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
     
-    // Track claimed reward IDs for later processing
-    let claimedRewardIds = [];
+    // Initialize rewards array
+    const claimedRewards = [];
     
-    for (const reward of allRewards) {
-      // Skip already redeemed rewards
+    // 1. Get explicitly claimed rewards (from customer_claimed_rewards)
+    const [claimedRewardsRows] = await connection.execute(
+      `SELECT ccr.reward_id, r.name, r.description, r.image_url, r.type,
+              r.discount_percentage, r.discount_fixed_amount, r.criteria_json
+       FROM customer_claimed_rewards ccr
+       JOIN rewards r ON ccr.reward_id = r.reward_id
+       WHERE ccr.customer_id = ? AND ccr.redeemed_date IS NULL`,
+      [customerId]
+    );
+    
+    // Process claimed rewards
+    for (const reward of claimedRewardsRows) {
+      // Skip redeemed rewards
       if (redeemedRewardIds.has(reward.reward_id)) {
         continue;
       }
       
-      // Get free menu items for this reward
+      // Get free menu items
       let freeMenuItemIds = [];
       try {
         const [menuItems] = await connection.execute(
@@ -4095,153 +4132,44 @@ app.get('/api/rewards/checkout', authenticateToken, async (req, res) => {
         console.error('Error fetching free menu items:', e);
       }
 
-      // Check if already claimed
-      let alreadyClaimed = false;
-      try {
-        // Make sure both customerId and reward.reward_id are not undefined
-        if (customerId && reward.reward_id) {
-          const [claimed] = await connection.execute(
-            `SELECT 1 FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ?`,
-            [customerId, reward.reward_id]
-          );
-          alreadyClaimed = claimed.length > 0;
-          
-          // If claimed, store this reward ID for later display as a claimed reward
-          if (alreadyClaimed) {
-            claimedRewardIds.push(reward.reward_id);
-          }
-        } else {
-          // Skip the check if no valid customerId (like for non-customer users)
-          console.log(`Skipping claimed check for ${reward.name}: user is not a customer or missing rewardId`);
-        }
-      } catch (e) {
-        console.error('Error checking if reward claimed:', e);
-      }
-
-      // Include unclaimed rewards in the standard rewards section
-      if (!alreadyClaimed || reward.type === 'voucher') {
-        checkoutRewards.push({
-          id: reward.reward_id,
-          name: reward.name,
-          description: reward.description || '',
-          type: reward.type,
-          image: reward.image_url || '',
-          pointsCost: reward.points_cost || 0,
-          discountPercentage: reward.discount_percentage || 0,
-          discountFixedAmount: reward.discount_fixed_amount || 0,
-          freeMenuItemIds: freeMenuItemIds,
-          isVoucher: false, // Regular reward by default
-          isClaimed: false
-        });
-      }
-    }
-    
-    // 2.5 Add claimed rewards (for redemption)
-    // Only process if we have a valid customer ID and claimed rewards
-    if (customerId && claimedRewardIds.length > 0) {
-      for (const rewardId of claimedRewardIds) {
-        // Skip already redeemed rewards
-        if (redeemedRewardIds.has(rewardId)) {
-          continue;
-        }
-        
-        // Get reward details
-        const [rewardDetails] = await connection.execute(
-          `SELECT reward_id, name, description, image_url, type, 
-                  points_cost, discount_percentage, discount_fixed_amount
-           FROM rewards 
-           WHERE reward_id = ?`,
-          [rewardId]
-        );
-        
-        if (rewardDetails.length > 0) {
-          const reward = rewardDetails[0];
-          
-          // Get free menu items for this reward
-          let freeMenuItemIds = [];
-          try {
-            const [menuItems] = await connection.execute(
-              `SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?`,
-              [reward.reward_id]
-            );
-            freeMenuItemIds = menuItems.map(item => item.product_id);
-          } catch (e) {
-            console.error('Error fetching free menu items for claimed reward:', e);
-          }
-          
-          // Add to checkout rewards with isClaimed flag
-          checkoutRewards.push({
+      // Add to claimed rewards
+      claimedRewards.push({
             id: reward.reward_id,
             name: `${reward.name} (Available)`,
             description: reward.description || '',
-            type: reward.type,
             image: reward.image_url || '',
-            pointsCost: 0, // No points cost to redeem a claimed reward
-            discountPercentage: reward.discount_percentage || 0,
-            discountFixedAmount: reward.discount_fixed_amount || 0,
+        type: reward.type,
+        discountPercentage: reward.discount_percentage ? parseFloat(reward.discount_percentage) : undefined,
+        discountFixedAmount: reward.discount_fixed_amount ? parseFloat(reward.discount_fixed_amount) : undefined,
             freeMenuItemIds: freeMenuItemIds,
             isVoucher: false,
-            isClaimed: true // Mark as claimed reward
-          });
-        }
-      }
+        isClaimed: true,
+        isEligible: true
+      });
     }
-
-    // 3. Get vouchers this user already has (if they're a customer)
-    let userVouchers = [];
-    if (customerId) {
-    try {
-      [userVouchers] = await connection.execute(
-        `SELECT cv.voucher_instance_id, cv.reward_id, cv.name_snapshot as name, cv.description_snapshot as description, 
-                r.image_url, r.type, r.discount_percentage, r.discount_fixed_amount, 
-                cv.expiry_date 
+    
+    // 2. Get active vouchers
+    const now = new Date();
+    const [vouchersRows] = await connection.execute(
+      `SELECT cv.voucher_instance_id, cv.reward_id, cv.name_snapshot as name, 
+              cv.description_snapshot as description, r.image_url, r.type,
+              r.discount_percentage, r.discount_fixed_amount, cv.expiry_date
          FROM customervouchers cv
          JOIN rewards r ON cv.reward_id = r.reward_id 
          WHERE cv.user_id = ? AND cv.status = 'active'`,
         [customerId]
       );
-    } catch (error) {
-        console.log("No vouchers found for user:", error.message);
-      userVouchers = [];
-      }
-    } else {
-      console.log("No customer ID available, skipping voucher fetch");
-    }
-
-    // Get redeemed voucher IDs from free_items_json
-    const redeemedVoucherIds = new Set();
-    if (redeemedRewardIds.size > 0) {
-      try {
-        const [voucherUsageRows] = await connection.execute(
-          `SELECT free_items_json FROM reward_usage WHERE user_id = ?`,
-          [customerId]
-        );
-        
-        voucherUsageRows.forEach(row => {
-          if (row.free_items_json) {
-            try {
-              const jsonData = JSON.parse(row.free_items_json);
-              if (jsonData && jsonData.voucherId) {
-                redeemedVoucherIds.add(jsonData.voucherId);
-              }
-            } catch (e) {
-              console.error('Error parsing free_items_json for voucher ID:', e);
-            }
-          }
-        });
-      } catch (error) {
-        console.error("Error fetching redeemed vouchers:", error);
-      }
-    }
-
-    // Process vouchers and add to rewards
-    for (const voucher of userVouchers) {
-      // Skip vouchers for already redeemed rewards or vouchers that have been used
-      if (redeemedRewardIds.has(voucher.reward_id) || redeemedVoucherIds.has(voucher.voucher_instance_id)) {
+    
+    // Process vouchers
+    for (const voucher of vouchersRows) {
+      // Skip expired vouchers
+      const expiryDate = voucher.expiry_date ? new Date(voucher.expiry_date) : null;
+      if (expiryDate && expiryDate < now) {
+        console.log(`[GET /api/rewards/claimed-only] Skipping expired voucher: ${voucher.voucher_instance_id}`);
         continue;
       }
       
-      // Get free menu items for this voucher
+      // Get free menu items
       let freeMenuItemIds = [];
       try {
         const [menuItems] = await connection.execute(
@@ -4253,44 +4181,264 @@ app.get('/api/rewards/checkout', authenticateToken, async (req, res) => {
         console.error('Error fetching free menu items for voucher:', e);
       }
 
-      checkoutRewards.push({
+      // Format date
+      const expiryFormatted = expiryDate ? 
+        `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')}` : 
+        'No expiry';
+      
+      // Add voucher to rewards
+      claimedRewards.push({
         id: voucher.reward_id,
-        name: voucher.name,
-        description: voucher.description || '',
-        type: voucher.type,
+        voucherId: voucher.voucher_instance_id,
+        name: `${voucher.name} (Voucher)`,
+        description: `${voucher.description || ''} (Expires: ${expiryFormatted})`,
         image: voucher.image_url || '',
-        pointsCost: 0, // Vouchers don't need points to redeem
-        discountPercentage: voucher.discount_percentage || 0,
-        discountFixedAmount: voucher.discount_fixed_amount || 0,
+        type: voucher.type,
+        discountPercentage: voucher.discount_percentage ? parseFloat(voucher.discount_percentage) : undefined,
+        discountFixedAmount: voucher.discount_fixed_amount ? parseFloat(voucher.discount_fixed_amount) : undefined,
         freeMenuItemIds: freeMenuItemIds,
         isVoucher: true,
-        instanceId: voucher.voucher_instance_id,
-        expiryDate: voucher.expiry_date
+        isClaimed: true,
+        isEligible: true,
+        expiryDate: expiryFormatted
       });
     }
 
-    res.json(checkoutRewards);
+    console.log(`[GET /api/rewards/claimed-only] Returning ${claimedRewards.length} claimed rewards/vouchers`);
+    res.json(claimedRewards);
+    
   } catch (error) {
-    console.error('Error getting checkout rewards:', error);
-    res.status(500).json({ message: 'Error fetching checkout rewards', error: error.message });
+    console.error('Error fetching claimed rewards:', error);
+    res.status(500).json({ message: 'Error fetching claimed rewards', error: error.message });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// POST /api/customers/:customerId/rewards/claim - Claim a reward
-app.post('/api/customers/:customerId/rewards/claim', authenticateToken, async (req, res) => {
-  const { customerId } = req.params;
-  const { rewardId } = req.body;
-  
-  // Validate required parameters
-  if (!rewardId) {
-    return res.status(400).json({ message: 'Missing rewardId in request body' });
-  }
+// --- Middleware to fix rewards display in Menu ---
+// NOTE: Middleware removed since we now have a proper /api/rewards/claimed-only endpoint
 
-  // Check authorization (user can only claim their own rewards or managers can claim for anyone)
-  if (req.user.userId != customerId && req.user.role !== 'manager') {
-    return res.status(403).json({ message: 'You do not have permission to claim rewards for this customer' });
+// POST /api/rewards/verify-claimed - Verify if rewards have been claimed or redeemed
+app.post('/api/rewards/verify-claimed', authenticateToken, async (req, res) => {
+  const { rewardIds } = req.body;
+  if (!rewardIds || !Array.isArray(rewardIds) || rewardIds.length === 0) {
+    return res.status(400).json({ message: 'Invalid request - rewardIds must be a non-empty array' });
+  }
+  
+  const customerId = req.user.internalId || String(req.user.userId);
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID not found in token." });
+  }
+  
+  let connection;
+  
+  try {
+    connection = await db.getConnection();
+    
+    // Check customer existence
+    const [customerRows] = await connection.execute(
+      'SELECT * FROM Users WHERE user_id = ? AND role = "customer"',
+      [customerId]
+    );
+
+    if (customerRows.length === 0) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    // Get claimed rewards
+    const placeholders = rewardIds.map(() => '?').join(',');
+    const [claimedRows] = await connection.execute(
+      `SELECT reward_id FROM customer_claimed_rewards 
+       WHERE customer_id = ? AND reward_id IN (${placeholders})`,
+      [customerId, ...rewardIds]
+    );
+    
+    // Get rewards that have been used in orders
+    const [redeemedRows] = await connection.execute(
+      `SELECT DISTINCT ru.reward_id 
+       FROM reward_usage ru
+       JOIN orders o ON ru.order_id = o.order_id
+       WHERE o.customer_id = ? AND ru.reward_id IN (${placeholders})`,
+      [customerId, ...rewardIds]
+    );
+    
+    // Create sets for easy lookup
+    const claimedRewardIds = new Set(claimedRows.map(row => row.reward_id));
+    const redeemedRewardIds = new Set(redeemedRows.map(row => row.reward_id));
+    
+    // Return the status of each reward
+    const result = rewardIds.map(rewardId => ({
+      rewardId,
+      isClaimed: claimedRewardIds.has(rewardId),
+      isRedeemed: redeemedRewardIds.has(rewardId)
+    }));
+    
+    res.json({ rewards: result });
+  } catch (error) {
+    console.error('Error verifying claimed rewards:', error);
+    res.status(500).json({ message: 'Error verifying claimed rewards', error: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Add the /api/rewards/claimed-only endpoint right before the middleware
+// GET /api/rewards/claimed-only - Get rewards that a customer has already claimed
+app.get('/api/rewards/claimed-only', authenticateToken, async (req, res) => {
+  // First try to get customer ID from internalId, then fall back to userId
+  const customerId = req.user.internalId || String(req.user.userId);
+  if (!customerId) {
+    // This should ideally be caught by authenticateToken if userId is essential
+    return res.status(400).json({ message: "Customer ID not found in token." });
+  }
+  console.log(`[GET /api/rewards/claimed-only] Using customer ID: ${customerId}`);
+
+  let connection;
+  try {
+    connection = await db.getConnection();
+
+    // First check if this is a customer
+    const [customerRows] = await connection.execute(
+      'SELECT * FROM Users WHERE user_id = ? AND role = "customer"',
+      [customerId]
+    );
+    
+    if (customerRows.length === 0) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+    
+    // Get redeemed rewards to filter them out
+    const [redeemedRewardsRows] = await connection.execute(
+      `SELECT DISTINCT ru.reward_id 
+       FROM reward_usage ru
+       JOIN orders o ON ru.order_id = o.order_id
+       WHERE o.customer_id = ?`,
+      [customerId]
+    );
+      
+    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
+    
+    // Initialize rewards array
+    const claimedRewards = [];
+    
+    // 1. Get explicitly claimed rewards (from customer_claimed_rewards)
+    const [claimedRewardsRows] = await connection.execute(
+      `SELECT ccr.reward_id, r.name, r.description, r.image_url, r.type,
+              r.discount_percentage, r.discount_fixed_amount, r.criteria_json
+       FROM customer_claimed_rewards ccr
+       JOIN rewards r ON ccr.reward_id = r.reward_id
+       WHERE ccr.customer_id = ? AND ccr.redeemed_date IS NULL`,
+      [customerId]
+    );
+    
+    // Process claimed rewards
+    for (const reward of claimedRewardsRows) {
+      // Skip redeemed rewards
+      if (redeemedRewardIds.has(reward.reward_id)) {
+        continue;
+      }
+      
+      // Get free menu items
+      let freeMenuItemIds = [];
+      try {
+        const [menuItems] = await connection.execute(
+          `SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?`,
+          [reward.reward_id]
+        );
+        freeMenuItemIds = menuItems.map(item => item.product_id);
+      } catch (e) {
+        console.error('Error fetching free menu items:', e);
+      }
+
+      // Add to claimed rewards
+      claimedRewards.push({
+        id: reward.reward_id,
+        name: `${reward.name} (Available)`,
+        description: reward.description || '',
+        image: reward.image_url || '',
+        type: reward.type,
+        discountPercentage: reward.discount_percentage ? parseFloat(reward.discount_percentage) : undefined,
+        discountFixedAmount: reward.discount_fixed_amount ? parseFloat(reward.discount_fixed_amount) : undefined,
+        freeMenuItemIds: freeMenuItemIds,
+        isVoucher: false,
+        isClaimed: true,
+        isEligible: true
+      });
+    }
+    
+    // 2. Get active vouchers
+    const now = new Date();
+    const [vouchersRows] = await connection.execute(
+      `SELECT cv.voucher_instance_id, cv.reward_id, cv.name_snapshot as name, 
+              cv.description_snapshot as description, r.image_url, r.type,
+              r.discount_percentage, r.discount_fixed_amount, cv.expiry_date
+       FROM customervouchers cv
+       JOIN rewards r ON cv.reward_id = r.reward_id 
+       WHERE cv.user_id = ? AND cv.status = 'active'`,
+      [customerId]
+    );
+    
+    // Process vouchers
+    for (const voucher of vouchersRows) {
+      // Skip expired vouchers
+      const expiryDate = voucher.expiry_date ? new Date(voucher.expiry_date) : null;
+      if (expiryDate && expiryDate < now) {
+        console.log(`[GET /api/rewards/claimed-only] Skipping expired voucher: ${voucher.voucher_instance_id}`);
+        continue;
+      }
+      
+      // Get free menu items
+      let freeMenuItemIds = [];
+      try {
+        const [menuItems] = await connection.execute(
+          `SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?`,
+          [voucher.reward_id]
+        );
+        freeMenuItemIds = menuItems.map(item => item.product_id);
+      } catch (e) {
+        console.error('Error fetching free menu items for voucher:', e);
+      }
+
+      // Format date
+      const expiryFormatted = expiryDate ? 
+        `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')}` : 
+        'No expiry';
+      
+      // Add voucher to rewards
+      claimedRewards.push({
+        id: voucher.reward_id,
+        name: `${voucher.name} (Voucher)`,
+        description: `${voucher.description || ''} (Expires: ${expiryFormatted})`,
+        image: voucher.image_url || '',
+        type: voucher.type,
+        discountPercentage: voucher.discount_percentage ? parseFloat(voucher.discount_percentage) : undefined,
+        discountFixedAmount: voucher.discount_fixed_amount ? parseFloat(voucher.discount_fixed_amount) : undefined,
+        freeMenuItemIds: freeMenuItemIds,
+        isVoucher: true,
+        instanceId: voucher.voucher_instance_id,
+        isClaimed: true,
+        isEligible: true,
+        expiryDate: expiryFormatted
+      });
+    }
+
+    console.log(`[GET /api/rewards/claimed-only] Customer has ${claimedRewards.length} claimed rewards`);
+    res.json(claimedRewards);
+    
+  } catch (error) {
+    console.error('Error fetching claimed rewards:', error);
+    res.status(500).json({ message: 'Error fetching claimed rewards', error: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// POST /api/orders/checkout - Process an order and return order details
+app.post('/api/orders/checkout', authenticateToken, async (req, res) => {
+  const { customerName, items, redeemedRewards, userId } = req.body;
+  
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: 'No items in order' });
   }
 
   let connection;
@@ -4298,201 +4446,438 @@ app.post('/api/customers/:customerId/rewards/claim', authenticateToken, async (r
     connection = await db.getConnection();
     await connection.beginTransaction();
 
-    // 1. Get reward details
-    const [rewardRows] = await connection.execute(
-      'SELECT * FROM rewards WHERE reward_id = ?',
-      [rewardId]
-    );
-
-    if (rewardRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: 'Reward not found' });
-    }
-
-    const reward = rewardRows[0];
-
-    // 2. Check if customer has already claimed this reward
-    // Ensure parameters are valid before executing query
-    if (!customerId || !rewardId) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Invalid customer ID or reward ID' });
-    }
+    // Generate a random order ID - could also use UUID
+    const orderId = 'ORD' + Date.now().toString() + Math.floor(Math.random() * 1000).toString();
     
-    const [claimedRows] = await connection.execute(
-      'SELECT * FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ?',
-      [customerId, rewardId]
+    // Generate ticket number (simple incremental)
+    const [lastOrderResult] = await connection.execute(
+      'SELECT MAX(CAST(SUBSTRING(ticket_number, 2) AS UNSIGNED)) as last_number FROM orders WHERE DATE(created_at) = CURDATE()'
     );
-
-    if (claimedRows.length > 0) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Reward already claimed by this customer' });
-    }
-
-    // 3. Get customer data
-    const [customerRows] = await connection.execute(
-      'SELECT * FROM Users WHERE user_id = ?',
-      [customerId]
-    );
-
-    if (customerRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: 'Customer not found' });
-    }
-
-    const customer = customerRows[0];
     
-    // 4. Handle points-based rewards
-    if (reward.points_cost > 0) {
-      // Check if customer has enough points
-      if (customer.loyalty_points < reward.points_cost) {
-        await connection.rollback();
-        return res.status(400).json({ 
-          message: 'Not enough points to claim this reward',
-          required: reward.points_cost,
-          available: customer.loyalty_points
-        });
-      }
-      
-      // Deduct points
-      await connection.execute(
-        'UPDATE users SET loyalty_points = loyalty_points - ? WHERE user_id = ?',
-        [reward.points_cost, customerId]
-      );
-      
-      // Add transaction record
-      await connection.execute(
-        `INSERT INTO loyalty_points_transactions 
-         (user_id, points, transaction_type, reward_id, notes) 
-         VALUES (?, ?, 'redeemed', ?, ?)`,
-        [customerId, -reward.points_cost, rewardId, `Redeemed for ${reward.name}`]
-      );
-    }
-
-    // 5. Handle reward claiming based on type
-    if (reward.type === 'voucher') {
-      // Create voucher instance with a UUID
-      const voucherId = uuidv4();
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + 30); // Default 30 days validity
-      
-      // Parse criteria to check for custom expiry date
-      let customExpiryDate = null;
-      if (reward.criteria_json) {
-        try {
-          const criteria = JSON.parse(reward.criteria_json);
-          if (criteria.validDateRange && criteria.validDateRange.endDate) {
-            const criteriaEndDate = new Date(criteria.validDateRange.endDate);
-            if (!isNaN(criteriaEndDate.getTime())) {
-              customExpiryDate = criteriaEndDate;
-            }
+    const lastNumber = lastOrderResult[0]?.last_number || 0;
+    const ticketNumber = 'T' + (parseInt(lastNumber) + 1).toString().padStart(3, '0');
+    
+    // Calculate order total
+    let orderTotal = 0;
+    let orderDiscount = 0;
+    
+    // Process any discounts from redeemed rewards
+    if (redeemedRewards && Array.isArray(redeemedRewards)) {
+      for (const reward of redeemedRewards) {
+        if (reward.appliedDiscount) {
+          if (reward.appliedDiscount.type === 'percentage' && reward.appliedDiscount.value) {
+            orderDiscount += (reward.appliedDiscount.originalTotal * (reward.appliedDiscount.value / 100));
+          } else if (reward.appliedDiscount.type === 'fixed' && reward.appliedDiscount.value) {
+            orderDiscount += reward.appliedDiscount.value;
           }
-        } catch (e) {
-          console.error('Error parsing reward criteria:', e);
         }
       }
-      
-      // Insert voucher instance
-      await connection.execute(
-        `INSERT INTO customervouchers (
-          voucher_instance_id, reward_id, user_id, name_snapshot, description_snapshot,
-          granted_date, expiry_date, status, granted_by_method
-        ) VALUES (?, ?, ?, ?, ?, NOW(), ?, 'active', 'system_earned')`,
-        [voucherId, rewardId, customerId, reward.name, reward.description, customExpiryDate || expiryDate]
-      );
     }
     
-    // 6. Record that customer has claimed this reward - using customerId from request
-    await connection.execute(
-      'INSERT INTO customer_claimed_rewards (customer_id, reward_id, claimed_date) VALUES (?, ?, NOW())',
-      [customerId, rewardId] // customerId is the user's internalId, which matches customer_id in database
+    // Calculate total from regular items
+    for (const item of items) {
+      if (!item.isRewardItem) { // Only count non-reward items for total
+        orderTotal += (item.unitPriceSnapshot * item.quantity);
+      }
+    }
+    
+    // Apply discount (never more than the order total)
+    const finalDiscount = Math.min(orderDiscount, orderTotal);
+    const finalTotal = Math.max(orderTotal - finalDiscount, 0);
+    
+    // Determine customer ID
+    let customerId = null;
+    if (userId) {
+      customerId = userId;
+    } else {
+      // For guest orders, we don't have a customer ID
+      // Could optionally create a guest customer record here
+    }
+    
+    // Insert order into database
+    const [orderResult] = await connection.execute(
+      `INSERT INTO orders 
+       (order_id, customer_id, customer_name_snapshot, total_amount, discount_amount, original_amount, status, ticket_number, created_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [orderId, customerId, customerName, finalTotal, finalDiscount, orderTotal, 'pending', ticketNumber]
     );
     
-    // claimedgeneralrewards table has been removed, so only using customer_claimed_rewards table now
+    // Insert order items
+    for (const item of items) {
+      // Convert selectedOptionsSnapshot from array of objects to JSON string
+      const optionsJson = JSON.stringify(item.selectedOptionsSnapshot || []);
+      // Calculate total line price
+      const totalLinePrice = item.unitPriceSnapshot * item.quantity;
+      
+      // Insert order line item
+      const [orderLineItemResult] = await connection.execute(
+        `INSERT INTO orderlineitems 
+         (order_id, product_id, product_name_snapshot, quantity, unit_price_snapshot, total_line_price, is_reward_item, reward_id) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          orderId, 
+          item.productId, 
+          item.name, 
+          item.quantity, 
+          item.unitPriceSnapshot, 
+          totalLinePrice,
+          item.isRewardItem ? 1 : 0,
+          item.rewardId || null
+        ]
+      );
+      
+      // Get the inserted order line item ID
+      const orderLineItemId = orderLineItemResult.insertId;
+      
+      // Insert selected options if any
+      if (item.selectedOptionsSnapshot && item.selectedOptionsSnapshot.length > 0) {
+        for (const option of item.selectedOptionsSnapshot) {
+          await connection.execute(
+            `INSERT INTO orderlineitem_selectedoptions 
+             (order_line_item_id, option_id, selected_option_label_snapshot, price_modifier_snapshot) 
+             VALUES (?, ?, ?, ?)`,
+            [
+              orderLineItemId,
+              option.option || option.optionId || null, // Use either option or optionId depending on your data structure
+              option.group ? `${option.group}: ${option.option}` : option.option, // Format as "group: option" if group exists
+              option.priceModifier || 0
+            ]
+          );
+        }
+      }
+    }
     
-    // Commit transaction
+    // Process redeemed rewards
+    if (redeemedRewards && Array.isArray(redeemedRewards) && redeemedRewards.length > 0) {
+      // Insert into order_rewards table for batch processing
+      const orderRewardsValues = redeemedRewards.map(reward => {
+        // Handle either freeItems or freeMenuItemIds
+        const freeItems = reward.freeItems || reward.freeMenuItemIds || [];
+        
+        return [
+          orderId,
+          reward.rewardId,
+          reward.voucherId || null,
+          reward.appliedDiscount ? (reward.appliedDiscount.type === 'percentage' ? 
+            (reward.appliedDiscount.originalTotal * (reward.appliedDiscount.value / 100)) : 
+            reward.appliedDiscount.value) : 0,
+          freeItems.length > 0 ? JSON.stringify(freeItems) : null
+        ];
+      });
+      
+      if (orderRewardsValues.length > 0) {
+        await connection.query(
+          `INSERT INTO order_rewards 
+           (order_id, reward_id, voucher_id, discount_amount, free_items_json) 
+           VALUES ?`,
+          [orderRewardsValues]
+        );
+      }
+      
+      // Process each reward individually
+      for (const reward of redeemedRewards) {
+        // Handle either freeItems or freeMenuItemIds
+        const freeItems = reward.freeItems || reward.freeMenuItemIds || [];
+        const usageType = reward.appliedDiscount ? 'discount' : 
+                         (freeItems.length > 0 ? 'free_items' : 'other');
+        
+        // Record reward usage
+        await connection.execute(
+          `INSERT INTO reward_usage 
+           (reward_id, order_id, user_id, usage_type, discount_amount, free_items_json) 
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            reward.rewardId,
+            orderId,
+            customerId,
+            usageType,
+            reward.appliedDiscount ? (reward.appliedDiscount.type === 'percentage' ? reward.appliedDiscount.value : reward.appliedDiscount.value) : 0,
+            reward.voucherId ? JSON.stringify({ voucherId: reward.voucherId, freeItems: freeItems }) : 
+              (freeItems.length > 0 ? JSON.stringify(freeItems) : null)
+          ]
+        );
+        
+        // If this is a voucher, mark it as redeemed
+        if (reward.voucherId) {
+          await connection.execute(
+            `UPDATE customervouchers SET status = 'redeemed', claimed_date = NOW() 
+             WHERE voucher_instance_id = ?`,
+            [reward.voucherId]
+          );
+        }
+        
+        // If this is a regular reward, mark it as redeemed in customer_claimed_rewards
+        if (!reward.voucherId && customerId) {
+          await connection.execute(
+            `UPDATE customer_claimed_rewards 
+             SET redeemed_date = NOW() 
+             WHERE customer_id = ? AND reward_id = ? AND redeemed_date IS NULL 
+             LIMIT 1`,
+            [customerId, reward.rewardId]
+          );
+        }
+      }
+    }
+    
+    // Commit the transaction
     await connection.commit();
     
-    // Send success response
+    // Check if order needs manager approval (e.g., for orders over $50)
+    const needsApproval = finalTotal >= 50; // Example threshold
+    
+    let responseData = {
+      message: 'Order placed successfully',
+      orderId: orderId,
+      ticketNumber: ticketNumber,
+      timestamp: new Date().toISOString(),
+      total: finalTotal,
+      discount: finalDiscount,
+      items: items.length,
+      status: 'pending'
+    };
+    
+    // If order needs approval, generate an approval URL
+    if (needsApproval && req.user.role !== 'manager') {
+      // In a real application, you would generate a secure token
+      // and store it in the database, associated with this order
+      const approvalToken = crypto.randomBytes(16).toString('hex');
+      
+      // Store the approval token in the database
+      await db.query(
+        'INSERT INTO order_approvals (order_id, approval_token, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+        [orderId, approvalToken]
+      );
+      
+      // Generate an approval URL
+      const approvalUrl = `http://localhost:3000/approve?type=checkout&token=${approvalToken}&orderId=${orderId}`;
+      
+      // Add the approval URL to the response
+      responseData.approvalUrl = approvalUrl;
+      responseData.needsApproval = true;
+    }
+    
+    // Respond with order details
+    res.status(201).json(responseData);
+    
+  } catch (error) {
+    // Rollback in case of error
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Error rolling back transaction:", rollbackError);
+      }
+    }
+    
+    console.error('Error creating order:', error);
+    res.status(500).json({ message: 'Error creating order', error: error.message });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+});
+
+// POST /api/orders/approve-checkout - Approve a pending order
+app.post('/api/orders/approve-checkout', async (req, res) => {
+  const { orderId } = req.body;
+  
+  if (!orderId) {
+    return res.status(400).json({ message: 'Order ID is required' });
+  }
+  
+  let connection;
+  try {
+    connection = await db.getConnection();
+    
+    // Update order status to approved
+    const [result] = await connection.execute(
+      `UPDATE orders SET status = 'approved', updated_at = NOW() WHERE order_id = ?`,
+      [orderId]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    
+    // Return success response
     res.status(200).json({ 
-      message: 'Reward claimed successfully',
-      rewardId: rewardId,
-      rewardName: reward.name,
-      pointsDeducted: reward.points_cost || 0,
-      remainingPoints: customer.loyalty_points - (reward.points_cost || 0)
+      message: 'Order approved successfully',
+      orderId
     });
     
   } catch (error) {
-    console.error('Error claiming reward:', error);
-    if (connection) {
-      try { 
-        await connection.rollback();
-      } catch (rbError) {
-        console.error('Error during rollback:', rbError);
-      }
-    }
-    res.status(500).json({ message: 'Error claiming reward', error: error.message });
+    console.error('Error approving order:', error);
+    res.status(500).json({ message: 'Error approving order', error: error.message });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// PATCH /api/customers/:customerId/vouchers/:voucherId/claim - Use a voucher
-app.patch('/api/customers/:customerId/vouchers/:voucherId/claim', authenticateToken, async (req, res) => {
-  const { customerId, voucherId } = req.params;
+// POST /api/orders/reject-checkout - Reject a pending order
+app.post('/api/orders/reject-checkout', async (req, res) => {
+  const { orderId } = req.body;
   
-  // Check authorization (user can only use their own vouchers or managers can use for anyone)
-  if (req.user.userId != customerId && req.user.role !== 'manager') {
-    return res.status(403).json({ message: 'You do not have permission to use vouchers for this customer' });
+  if (!orderId) {
+    return res.status(400).json({ message: 'Order ID is required' });
   }
-
+  
   let connection;
   try {
     connection = await db.getConnection();
     
-    // 1. Check if voucher exists and is active
-    const [voucherRows] = await connection.execute(
-      `SELECT cv.*, r.name as reward_name 
-       FROM customervouchers cv
-       JOIN rewards r ON cv.reward_id = r.reward_id
-       WHERE cv.voucher_instance_id = ? AND cv.user_id = ? AND cv.status = 'active'`,
-      [voucherId, customerId]
-    );
-
-    if (voucherRows.length === 0) {
-      return res.status(404).json({ message: 'Voucher not found or already used' });
-    }
-
-    const voucher = voucherRows[0];
-    
-    // 2. Check if voucher is expired
-    if (voucher.expiry_date && new Date(voucher.expiry_date) < new Date()) {
-      // Update status to expired
-      await connection.execute(
-        'UPDATE customervouchers SET status = "expired" WHERE voucher_instance_id = ?',
-        [voucherId]
-      );
-      return res.status(400).json({ message: 'This voucher has expired' });
-    }
-    
-    // 3. Mark voucher as claimed/used
-    await connection.execute(
-      'UPDATE customervouchers SET status = "claimed", claimed_date = NOW() WHERE voucher_instance_id = ?',
-      [voucherId]
+    // Update order status to rejected
+    const [result] = await connection.execute(
+      `UPDATE orders SET status = 'rejected', updated_at = NOW() WHERE order_id = ?`,
+      [orderId]
     );
     
-    // Send success response
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    
+    // Return success response
     res.status(200).json({ 
-      message: 'Voucher used successfully',
-      voucherId: voucherId,
-      rewardId: voucher.reward_id,
-      rewardName: voucher.reward_name
+      message: 'Order rejected successfully',
+      orderId
     });
     
   } catch (error) {
-    console.error('Error using voucher:', error);
-    res.status(500).json({ message: 'Error using voucher', error: error.message });
+    console.error('Error rejecting order:', error);
+    res.status(500).json({ message: 'Error rejecting order', error: error.message });
   } finally {
     if (connection) connection.release();
+  }
+});
+
+// Create necessary tables if they don't exist
+(async () => {
+  try {
+    const connection = await db.getConnection();
+    
+    // Create PasswordResetTokens table if it doesn't exist
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS PasswordResetTokens (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        user_id INT NOT NULL,
+        token VARCHAR(255) NOT NULL,
+        expires_at DATETIME NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE
+      )
+    `);
+    
+    // Create UserSettings table if it doesn't exist
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS usersettings (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        user_id INT NOT NULL,
+        settings_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE
+      )
+    `);
+    
+    // Create OrderApprovals table if it doesn't exist
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS order_approvals (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        order_id VARCHAR(255) NOT NULL,
+        approval_token VARCHAR(255) NOT NULL,
+        approved BOOLEAN DEFAULT FALSE,
+        approved_by INT NULL,
+        approval_date DATETIME NULL,
+        expires_at DATETIME NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY (approval_token),
+        FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
+      )
+    `);
+    
+    console.log('Database tables checked/created successfully');
+    connection.release();
+  } catch (error) {
+    console.error('Error setting up database tables:', error);
+  }
+})();
+
+// Start the server
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
+
+// UPDATE existing user
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+  // Existing code...
+});
+
+// GET /api/users/:userId/settings - Get user settings
+app.get('/api/users/:userId/settings', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  
+  // Authorization check: User can only access their own settings, unless they are a manager
+  if (req.user.userId != userId && req.user.role !== 'manager') {
+    return res.status(403).json({ 
+      message: 'Forbidden: You can only access your own settings.' 
+    });
+  }
+  
+  try {
+    // Get user settings from database
+    const [settings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
+    
+    if (settings.length === 0) {
+      // If no settings found, return default settings
+      return res.json({
+        autoSave: false,
+        theme: 'light',
+        profileBanner: {
+          type: 'color',
+          value: '#a7f3d0',
+        }
+      });
+    }
+    
+    // Parse settings JSON and return
+    const userSettings = safeJsonParse(settings[0].settings_json);
+    res.json(userSettings);
+  } catch (error) {
+    console.error(`Error fetching settings for user ${userId}:`, error);
+    res.status(500).json({ message: 'Error fetching user settings', error: error.message });
+  }
+});
+
+// PUT /api/users/:userId/settings - Update user settings
+app.put('/api/users/:userId/settings', authenticateToken, async (req, res) => {
+  const { userId } = req.params;
+  const newSettings = req.body;
+  
+  // Authorization check: User can only update their own settings, unless they are a manager
+  if (req.user.userId != userId && req.user.role !== 'manager') {
+    return res.status(403).json({ 
+      message: 'Forbidden: You can only update your own settings.' 
+    });
+  }
+  
+  try {
+    // Check if settings exist for user
+    const [existingSettings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
+    
+    const settingsJson = JSON.stringify(newSettings);
+    
+    if (existingSettings.length === 0) {
+      // Insert new settings
+      await db.query('INSERT INTO usersettings (user_id, settings_json) VALUES (?, ?)', [userId, settingsJson]);
+    } else {
+      // Update existing settings
+      await db.query('UPDATE usersettings SET settings_json = ? WHERE user_id = ?', [settingsJson, userId]);
+    }
+    
+    res.json({ message: 'Settings updated successfully', settings: newSettings });
+  } catch (error) {
+    console.error(`Error updating settings for user ${userId}:`, error);
+    res.status(500).json({ message: 'Error updating user settings', error: error.message });
   }
 });
 
@@ -4628,7 +5013,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     
     // Update the user's password in the database
-    await db.query('UPDATE Users SET password = ? WHERE email = ?', [hashedPassword, email]);
+    await db.query('UPDATE Users SET password_hash = ? WHERE email = ?', [hashedPassword, email]);
     
     // Delete the reset request
     pendingApprovals.passwordResets.delete(token);
@@ -5082,443 +5467,5 @@ app.post('/api/orders/reject-checkout', async (req, res) => {
   } catch (error) {
     console.error('Checkout rejection error:', error);
     res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-// GET /api/rewards/customer/:id/claimed - Get claimed rewards for a specific customer
-app.get('/api/rewards/customer/:id/claimed', authenticateToken, async (req, res) => {
-  const customerId = req.params.id;
-  const userId = req.user.userId;
-  
-  // Security check: Users can only fetch their own claimed rewards, managers can fetch any
-  if (req.user.role !== 'manager' && userId != customerId) {
-    return res.status(403).json({ message: "Forbidden: You can only view your own claimed rewards." });
-  }
-  
-  let connection;
-
-  try {
-    connection = await db.getConnection();
-
-    // 1. Fetch active vouchers for this customer - using GROUP_CONCAT instead of JSON_ARRAYAGG
-    const vouchersSql = `
-      SELECT 
-        cv.voucher_instance_id AS instanceId,
-        r.reward_id AS id,
-        r.name,
-        r.description,
-        r.image_url AS image,
-        r.type,
-        r.points_cost AS pointsCost, /* Original points cost, for display */
-        r.discount_percentage AS discountPercentage,
-        r.discount_fixed_amount AS discountFixedAmount,
-        cv.expiry_date AS expiryDate,
-        GROUP_CONCAT(DISTINCT rfmi.product_id) AS product_ids
-      FROM customervouchers cv
-      JOIN rewards r ON cv.reward_id = r.reward_id
-      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
-      WHERE cv.user_id = ? AND cv.status = 'active' 
-            AND (cv.expiry_date IS NULL OR cv.expiry_date >= CURDATE()) /* Ensure voucher is not expired */
-      GROUP BY cv.voucher_instance_id, r.reward_id, r.name, r.description, r.image_url, r.type, r.points_cost, r.discount_percentage, r.discount_fixed_amount, cv.expiry_date
-    `;
-    
-    const [voucherRows] = await connection.query(vouchersSql, [customerId]);
-    
-    // Format vouchers - convert GROUP_CONCAT string to array
-    const formattedVouchers = voucherRows.map(voucher => ({
-      id: voucher.id,
-      name: voucher.name,
-      description: voucher.description,
-      image: voucher.image,
-      type: voucher.type,
-      pointsCost: voucher.pointsCost ? parseFloat(voucher.pointsCost) : undefined,
-      discountPercentage: voucher.discountPercentage ? parseFloat(voucher.discountPercentage) : undefined,
-      discountFixedAmount: voucher.discountFixedAmount ? parseFloat(voucher.discountFixedAmount) : undefined,
-      freeMenuItemIds: voucher.product_ids ? voucher.product_ids.split(',') : [],
-      isVoucher: true,
-      instanceId: voucher.instanceId,
-      expiryDate: voucher.expiryDate ? new Date(voucher.expiryDate).toISOString().split('T')[0] : undefined,
-      isClaimed: true 
-    }));
-    
-    // 2. Fetch details for general rewards claimed by the customer - using GROUP_CONCAT instead of JSON_ARRAYAGG
-    const claimedGeneralRewardsSql = `
-      SELECT 
-        r.reward_id AS id,
-        r.name,
-        r.description,
-        r.image_url AS image,
-        r.type,
-        r.points_cost AS pointsCost, /* Original points cost */
-        r.discount_percentage AS discountPercentage,
-        r.discount_fixed_amount AS discountFixedAmount,
-        ccr.claimed_date AS claimedDate, 
-        GROUP_CONCAT(DISTINCT rfmi.product_id) AS product_ids
-      FROM customer_claimed_rewards ccr
-      JOIN rewards r ON ccr.reward_id = r.reward_id
-      LEFT JOIN reward_freemenuitems rfmi ON r.reward_id = rfmi.reward_id
-      WHERE ccr.customer_id = ?
-      GROUP BY r.reward_id, r.name, r.description, r.image_url, r.type, r.points_cost, r.discount_percentage, r.discount_fixed_amount, ccr.claimed_date
-    `;
-    
-    const [claimedGeneralRewardRows] = await connection.query(claimedGeneralRewardsSql, [customerId]);
-    
-    // Format claimed general rewards - convert GROUP_CONCAT string to array
-    const formattedClaimedGeneralRewards = claimedGeneralRewardRows.map(reward => ({
-      id: reward.id,
-      name: reward.name,
-      description: reward.description,
-      image: reward.image,
-      type: reward.type,
-      pointsCost: reward.pointsCost ? parseFloat(reward.pointsCost) : undefined,
-      discountPercentage: reward.discountPercentage ? parseFloat(reward.discountPercentage) : undefined,
-      discountFixedAmount: reward.discountFixedAmount ? parseFloat(reward.discountFixedAmount) : undefined,
-      freeMenuItemIds: reward.product_ids ? reward.product_ids.split(',') : [],
-      isVoucher: false,
-      isClaimed: true,
-      // claimedDate: reward.claimedDate ? new Date(reward.claimedDate).toISOString() : undefined // Optional
-    }));
-        
-    // Combine both types of rewards
-    const allClaimedRewards = [...formattedVouchers, ...formattedClaimedGeneralRewards];
-    
-    res.json(allClaimedRewards);
-    
-  } catch (error) {
-    console.error('Error fetching claimed rewards:', error);
-    res.status(500).json({ message: 'Error fetching claimed rewards', error: error.message });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
-// --- Helper functions for image handling
-// ... existing code ...
-
-// GET /api/users/:userId/settings - Get user settings
-app.get('/api/users/:userId/settings', authenticateToken, async (req, res) => {
-  const { userId } = req.params;
-  
-  // Authorization check: User can only access their own settings, unless they are a manager
-  if (req.user.userId != userId && req.user.role !== 'manager') {
-    return res.status(403).json({ 
-      message: 'Forbidden: You can only access your own settings.' 
-    });
-  }
-  
-  try {
-    // Get user settings from database
-    const [settings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
-    
-    if (settings.length === 0) {
-      // If no settings found, return default settings
-      return res.json({
-        autoSave: false,
-        theme: 'light',
-        profileBanner: {
-          type: 'color',
-          value: '#a7f3d0',
-        }
-      });
-    }
-    
-    // Parse settings JSON and return
-    const userSettings = safeJsonParse(settings[0].settings_json);
-    res.json(userSettings);
-  } catch (error) {
-    console.error(`Error fetching settings for user ${userId}:`, error);
-    res.status(500).json({ message: 'Error fetching user settings', error: error.message });
-  }
-});
-
-// PUT /api/users/:userId/settings - Update user settings
-app.put('/api/users/:userId/settings', authenticateToken, async (req, res) => {
-  const { userId } = req.params;
-  const newSettings = req.body;
-  
-  // Authorization check: User can only update their own settings, unless they are a manager
-  if (req.user.userId != userId && req.user.role !== 'manager') {
-    return res.status(403).json({ 
-      message: 'Forbidden: You can only update your own settings.' 
-    });
-  }
-  
-  try {
-    // Check if settings exist for user
-    const [existingSettings] = await db.query('SELECT settings_json FROM usersettings WHERE user_id = ?', [userId]);
-    
-    const settingsJson = JSON.stringify(newSettings);
-    
-    if (existingSettings.length === 0) {
-      // Insert new settings
-      await db.query('INSERT INTO usersettings (user_id, settings_json) VALUES (?, ?)', [userId, settingsJson]);
-    } else {
-      // Update existing settings
-      await db.query('UPDATE usersettings SET settings_json = ? WHERE user_id = ?', [settingsJson, userId]);
-    }
-    
-    res.json({ message: 'Settings updated successfully', settings: newSettings });
-  } catch (error) {
-    console.error(`Error updating settings for user ${userId}:`, error);
-    res.status(500).json({ message: 'Error updating user settings', error: error.message });
-  }
-});
-
-// GET /api/rewards/customer/:id/claimed - Get claimed rewards for a specific customer
-app.get('/api/rewards/customer/:id/claimed', authenticateToken, async (req, res) => {
-  // ... existing code ...
-});
-
-// POST /api/rewards/customer/:id/claim/:rewardId - Claim a reward for a specific customer
-app.post('/api/rewards/customer/:id/claim/:rewardId', authenticateToken, async (req, res) => {
-  const customerId = req.params.id;
-  const rewardId = req.params.rewardId;
-  
-  // Check authorization (user can only claim their own rewards or managers can claim for anyone)
-  if (req.user.userId != customerId && req.user.role !== 'manager' && req.user.role !== 'employee') {
-    return res.status(403).json({ message: 'You do not have permission to claim rewards for this customer' });
-  }
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-    await connection.beginTransaction();
-
-    // 1. Get reward details
-    const [rewardRows] = await connection.execute(
-      'SELECT * FROM rewards WHERE reward_id = ?',
-      [rewardId]
-    );
-
-    if (rewardRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: 'Reward not found' });
-    }
-
-    const reward = rewardRows[0];
-
-    // 2. Check if customer has already claimed this reward
-    const [claimedRows] = await connection.execute(
-      'SELECT * FROM customer_claimed_rewards WHERE customer_id = ? AND reward_id = ?',
-      [customerId, rewardId]
-    );
-
-    if (claimedRows.length > 0) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'Reward already claimed by this customer' });
-    }
-
-    // 3. Get customer data
-    const [customerRows] = await connection.execute(
-      'SELECT * FROM Users WHERE user_id = ?',
-      [customerId]
-    );
-
-    if (customerRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: 'Customer not found' });
-    }
-
-    const customer = customerRows[0];
-
-    // 4. If reward has a point cost, check if customer has enough points
-    if (reward.points_cost && customer.loyalty_points < reward.points_cost) {
-      await connection.rollback();
-      return res.status(400).json({ 
-        message: 'Not enough loyalty points', 
-        pointsRequired: reward.points_cost,
-        pointsAvailable: customer.loyalty_points
-      });
-    }
-
-    // 5. Insert record in customer_claimed_rewards
-    await connection.execute(
-      'INSERT INTO customer_claimed_rewards (customer_id, reward_id, claimed_date) VALUES (?, ?, NOW())',
-      [customerId, rewardId]
-    );
-
-    // 6. If reward has a point cost, deduct points from customer
-    if (reward.points_cost && reward.points_cost > 0) {
-      await connection.execute(
-        'UPDATE Users SET loyalty_points = loyalty_points - ? WHERE user_id = ?',
-        [reward.points_cost, customerId]
-      );
-    }
-
-    // Commit the transaction
-    await connection.commit();
-    
-    // Send success response
-    res.status(200).json({ 
-      success: true,
-      message: 'Reward claimed successfully',
-      rewardId: rewardId,
-      rewardName: reward.name,
-      pointsDeducted: reward.points_cost || 0,
-      remainingPoints: customer.loyalty_points - (reward.points_cost || 0)
-    });
-    
-  } catch (error) {
-    console.error('Error claiming reward:', error);
-    if (connection) {
-      try { 
-        await connection.rollback();
-      } catch (rbError) {
-        console.error('Error during rollback:', rbError);
-      }
-    }
-    res.status(500).json({ message: 'Error claiming reward', error: error.message });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
-// GET /api/rewards/claimed-only - Get rewards that a customer has already claimed
-app.get('/api/rewards/claimed-only', authenticateToken, async (req, res) => {
-  // First try to get customer ID from internalId, then fall back to userId
-  const customerId = req.user.internalId || String(req.user.userId);
-  if (!customerId) {
-    // This should ideally be caught by authenticateToken if userId is essential
-    return res.status(400).json({ message: "Customer ID not found in token." });
-  }
-  console.log(`[GET /api/rewards/claimed-only] Using customer ID: ${customerId}`);
-
-  let connection;
-  try {
-    connection = await db.getConnection();
-
-    // First check if this is a customer
-    const [customerRows] = await connection.execute(
-      'SELECT * FROM Users WHERE user_id = ? AND role = "customer"',
-      [customerId]
-    );
-    
-    if (customerRows.length === 0) {
-      return res.status(404).json({ message: 'Customer not found' });
-    }
-    
-    // Get redeemed rewards to filter them out
-    const [redeemedRewardsRows] = await connection.execute(
-      `SELECT DISTINCT ru.reward_id 
-       FROM reward_usage ru
-       JOIN orders o ON ru.order_id = o.order_id
-       WHERE o.customer_id = ?`,
-      [customerId]
-    );
-      
-    const redeemedRewardIds = new Set(redeemedRewardsRows.map(row => row.reward_id));
-    
-    // Initialize rewards array
-    const claimedRewards = [];
-    
-    // 1. Get explicitly claimed rewards (from customer_claimed_rewards)
-    const [claimedRewardsRows] = await connection.execute(
-      `SELECT ccr.reward_id, r.name, r.description, r.image_url, r.type,
-              r.discount_percentage, r.discount_fixed_amount, r.criteria_json
-       FROM customer_claimed_rewards ccr
-       JOIN rewards r ON ccr.reward_id = r.reward_id
-       WHERE ccr.customer_id = ? AND ccr.redeemed_date IS NULL`,
-      [customerId]
-    );
-    
-    // Process claimed rewards
-    for (const reward of claimedRewardsRows) {
-      // Skip redeemed rewards
-      if (redeemedRewardIds.has(reward.reward_id)) {
-        continue;
-      }
-      
-      // Get free menu items
-      let freeMenuItemIds = [];
-      try {
-        const [menuItems] = await connection.execute(
-          `SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?`,
-          [reward.reward_id]
-        );
-        freeMenuItemIds = menuItems.map(item => item.product_id);
-      } catch (e) {
-        console.error('Error fetching free menu items:', e);
-      }
-
-      // Add to claimed rewards
-      claimedRewards.push({
-        id: reward.reward_id,
-        name: `${reward.name} (Available)`,
-        description: reward.description || '',
-        image: reward.image_url || '',
-        type: reward.type,
-        discountPercentage: reward.discount_percentage ? parseFloat(reward.discount_percentage) : undefined,
-        discountFixedAmount: reward.discount_fixed_amount ? parseFloat(reward.discount_fixed_amount) : undefined,
-        freeMenuItemIds: freeMenuItemIds,
-        isVoucher: false,
-        isClaimed: true,
-        isEligible: true
-      });
-    }
-    
-    // 2. Get active vouchers
-    const now = new Date();
-    const [vouchersRows] = await connection.execute(
-      `SELECT cv.voucher_instance_id, cv.reward_id, cv.name_snapshot as name, 
-              cv.description_snapshot as description, r.image_url, r.type,
-              r.discount_percentage, r.discount_fixed_amount, cv.expiry_date
-       FROM customervouchers cv
-       JOIN rewards r ON cv.reward_id = r.reward_id 
-       WHERE cv.user_id = ? AND cv.status = 'active'`,
-      [customerId]
-    );
-    
-    // Process vouchers
-    for (const voucher of vouchersRows) {
-      // Skip expired vouchers
-      const expiryDate = voucher.expiry_date ? new Date(voucher.expiry_date) : null;
-      if (expiryDate && expiryDate < now) {
-        console.log(`[GET /api/rewards/claimed-only] Skipping expired voucher: ${voucher.voucher_instance_id}`);
-        continue;
-      }
-      
-      // Get free menu items
-      let freeMenuItemIds = [];
-      try {
-        const [menuItems] = await connection.execute(
-          `SELECT product_id FROM reward_freemenuitems WHERE reward_id = ?`,
-          [voucher.reward_id]
-        );
-        freeMenuItemIds = menuItems.map(item => item.product_id);
-      } catch (e) {
-        console.error('Error fetching free menu items for voucher:', e);
-      }
-
-      // Format date
-      const expiryFormatted = expiryDate ? 
-        `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')}` : 
-        'No expiry';
-      
-      // Add voucher to rewards
-      claimedRewards.push({
-        id: voucher.reward_id,
-        name: `${voucher.name} (Voucher)`,
-        description: `${voucher.description || ''} (Expires: ${expiryFormatted})`,
-        image: voucher.image_url || '',
-        type: voucher.type,
-        discountPercentage: voucher.discount_percentage ? parseFloat(voucher.discount_percentage) : undefined,
-        discountFixedAmount: voucher.discount_fixed_amount ? parseFloat(voucher.discount_fixed_amount) : undefined,
-        freeMenuItemIds: freeMenuItemIds,
-        isVoucher: true,
-        instanceId: voucher.voucher_instance_id,
-        isClaimed: true,
-        isEligible: true,
-        expiryDate: expiryFormatted
-      });
-    }
-
-    console.log(`[GET /api/rewards/claimed-only] Customer has ${claimedRewards.length} claimed rewards`);
-    res.json(claimedRewards);
-    
-  } catch (error) {
-    console.error('Error fetching claimed rewards:', error);
-    res.status(500).json({ message: 'Error fetching claimed rewards', error: error.message });
-  } finally {
-    if (connection) connection.release();
   }
 });

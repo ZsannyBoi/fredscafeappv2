@@ -15,7 +15,6 @@ interface DisplayEmployee extends EmployeeData {
 interface EmployeeFormDetails {
   employeeId: string;
   position: EmployeeData['position']; // Use the position type from EmployeeData
-  phone_number?: string;
   status: EmployeeData['status']; // Use the status type from EmployeeData
   hireDate?: string;
   role?: User['role']; // Ensure this is here
@@ -35,7 +34,6 @@ const Employee: React.FC = () => {
   const [employeeDetails, setEmployeeDetails] = useState<EmployeeFormDetails>({
     employeeId: '',
     position: 'Other', // Default position from EmployeeData['position']
-    phone_number: '',
     status: 'Active', 
     hireDate: '',
     role: 'employee', // Default role
@@ -211,7 +209,6 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other',
-      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Reset role on close
@@ -244,7 +241,6 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other',
-      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Default role for new employee
@@ -263,7 +259,7 @@ const Employee: React.FC = () => {
   const handleEmployeeDetailsChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setEmployeeDetails(prev => ({ ...prev, [name]: value }));
-    if (name === 'employeeId' || name === 'phone_number') {
+    if (name === 'employeeId') {
       setEmployeeIdConflictError(null); // Reset conflict error when ID changes
     }
     setError(null); // Clear general form error on any change
@@ -295,7 +291,6 @@ const Employee: React.FC = () => {
           userEmail: selectedUserForEmployee.email,
           employeeIdCode: employeeDetails.employeeId.trim(),
           position: employeeDetails.position,
-          phone_number: employeeDetails.phone_number?.trim() || null,
           hireDate: employeeDetails.hireDate ? new Date(employeeDetails.hireDate).toISOString() : new Date().toISOString(),
           status: employeeDetails.status,
           role: employeeDetails.role,
@@ -373,7 +368,6 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
         employeeId: employeeToEdit.employeeId,
         position: employeeToEdit.position, 
-        phone_number: employeeToEdit.user.phone_number || '',
         status: employeeToEdit.status,
         hireDate: employeeToEdit.hireDate ? new Date(employeeToEdit.hireDate).toISOString().split('T')[0] : '',
         role: employeeToEdit.user.role || 'employee',
@@ -402,7 +396,6 @@ const Employee: React.FC = () => {
           employeeIdCode: employeeDetails.employeeId.trim(),
           position: employeeDetails.position, 
           status: employeeDetails.status,
-          phone_number: employeeDetails.phone_number?.trim() || null,
           hireDate: employeeDetails.hireDate ? new Date(employeeDetails.hireDate).toISOString() : undefined,
           role: employeeDetails.role,
         }),
@@ -522,7 +515,6 @@ const Employee: React.FC = () => {
     setEmployeeDetails({
       employeeId: '',
       position: 'Other', 
-      phone_number: '',
       status: 'Active',
       hireDate: '',
       role: 'employee', // Reset role
@@ -679,15 +671,16 @@ const Employee: React.FC = () => {
                       />
                     </FormItem>
                     <FormItem label="Position*">
-                      <select name="position" value={employeeDetails.position} onChange={handleEmployeeDetailsChange} className="form-select" required disabled={isSaving}>
-                        <option value="" disabled>Select position</option>
-                        <option value="Manager">Manager</option>
-                        <option value="Barista">Barista</option>
-                        <option value="Cashier">Cashier</option>
-                        <option value="Cook">Cook</option>
-                        <option value="Shift Lead">Shift Lead</option>
-                        <option value="Other">Other</option>
-                      </select>
+                      <input 
+                        type="text" 
+                        name="position" 
+                        value={employeeDetails.position} 
+                        onChange={handleEmployeeDetailsChange} 
+                        className="form-input"
+                        placeholder="Enter position (e.g. Barista, Manager, etc.)"
+                        required 
+                        disabled={isSaving}
+                      />
                     </FormItem>
                     <FormItem label="System Role*">
                       <select name="role" value={employeeDetails.role} onChange={handleEmployeeDetailsChange} className="form-select" required disabled={isSaving}>
@@ -698,9 +691,6 @@ const Employee: React.FC = () => {
                         {/* Customer role typically shouldn't be assigned here, but including for completeness if needed */}
                         {/* <option value="customer">Customer</option> */}
                       </select>
-                    </FormItem>
-                    <FormItem label="Phone">
-                      <input type="tel" name="phone_number" value={employeeDetails.phone_number || ''} onChange={handleEmployeeDetailsChange} className="form-input" disabled={isSaving} />
                     </FormItem>
                     {(!editingEmployee || (editingEmployee && employeeDetails.hireDate !== undefined)) && (
                       <FormItem label="Hire Date (YYYY-MM-DD)">
@@ -790,7 +780,6 @@ const EmployeeDetailsPanel: React.FC<EmployeeDetailsPanelProps> = ({ employee: e
                       {employeeProp.status}
                        </span>
                   </DetailItem>
-                <DetailItem label="Phone" value={employeeProp.user.phone_number || 'N/A'} />
                 <DetailItem label="Hire Date" value={employeeProp.hireDate ? new Date(employeeProp.hireDate).toLocaleDateString() : 'N/A'} />
                 {employeeProp.user && employeeProp.user.role && <DetailItem label="System Role" value={employeeProp.user.role} />}
              </div>

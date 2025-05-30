@@ -131,6 +131,9 @@ export interface OrderItem {
   status: 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled';
   timestamp: string;
   ticketNumber: string;
+  createdAt?: string; // ISO date string for when the order was created
+  completedAt?: string; // ISO date string for when the order was completed
+  updatedAt?: string; // ISO date string for when the order was last updated
 }
 
 export interface OrderResponse {

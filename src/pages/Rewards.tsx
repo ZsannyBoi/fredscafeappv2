@@ -446,6 +446,15 @@ const Rewards: React.FC<RewardsProps> = ({
                 // Success - fetch new data to show updated state
                 toast.success(instanceId ? "Voucher applied successfully!" : "Reward claimed successfully!");
                 
+                // Mark the reward as redeemed in localStorage to ensure Menu.tsx knows it's claimed
+                const storageKey = `redeemed_reward_${rewardId}${instanceId ? '_' + instanceId : ''}`;
+                localStorage.setItem(storageKey, 'true');
+                
+                // Also mark it as newly redeemed so it will show up in the Menu rewards modal
+                if (user?.internalId) {
+                    localStorage.setItem(`newly_redeemed_${rewardId}_${user.internalId}`, 'true');
+                }
+                
                 // Some rewards will give points, vouchers, etc. - handle those cases by refetching data
                 const fetchDataAsync = async () => {
                     setIsLoading(true);

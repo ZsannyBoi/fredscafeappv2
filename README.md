@@ -714,8 +714,4 @@ EspressoLane implements a comprehensive error handling and validation system to 
 - **Route-Specific Error Handling**: Customized error responses for different endpoints
 - **Try-Catch Blocks**: Comprehensive error catching around database operations
 - **Cleanup on Error**: Resource cleanup (like file deletion) when operations fail
-<<<<<<< HEAD
 - **Informative Logging**: Detailed server-side logging for troubleshooting 
-=======
-- **Informative Logging**: Detailed server-side logging for troubleshooting 
->>>>>>> 6e0d1a5cb037868de58d9123d9c7876f50fb3185

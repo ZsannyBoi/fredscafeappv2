@@ -284,7 +284,7 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
           <div>
             <h2 className="text-xl font-semibold text-brown-800 mb-4">About EspressoLane</h2>
             <p className="text-gray-600">Version 1.0.0</p>
-            <p className="text-gray-600">© 2024 EspressoLane. All rights reserved.</p>
+            <p className="text-gray-600">© 2025 EspressoLane. All rights reserved.</p>
           </div>
         );
       default:

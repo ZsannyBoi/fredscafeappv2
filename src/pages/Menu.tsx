@@ -58,7 +58,7 @@ interface MenuPageProps {
 const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode => {
   // --- State --- 
   const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<OptionCategory[]>([]);
+  const [categories, setCategories] = useState<{id: string; name: string; image_url?: string}[]>([]);
   const [orderItems, setOrderItems] = useState<MenuOrderItem[]>([]);
   const [cardSelections, setCardSelections] = useState<CardSelectionState>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -102,6 +102,45 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     setProductOptionsCache({});
   };
 
+  // --- Verify rewards claimed status against server ---
+  const verifyRewardsStatus = async (rewardIds: string[]) => {
+    if (!user?.internalId || !rewardIds.length) return;
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`http://localhost:3001/api/rewards/verify-claimed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ rewardIds })
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to verify rewards status:', response.statusText);
+        return;
+      }
+      
+      const data = await response.json();
+      
+      // Update localStorage based on server response
+      data.rewards.forEach((reward: { rewardId: string, isClaimed: boolean, isRedeemed: boolean }) => {
+        if (reward.isRedeemed) {
+          // If redeemed, mark in localStorage
+          localStorage.setItem(`redeemed_reward_${reward.rewardId}`, 'true');
+        }
+      });
+      
+      // Refresh available rewards after updating localStorage
+      if (data.rewards.some((r: { isRedeemed: boolean }) => r.isRedeemed)) {
+        fetchCustomerRewards();
+      }
+    } catch (err) {
+      console.error('Error verifying rewards status:', err);
+    }
+  };
+
   // --- Effects --- 
   useEffect(() => {
     if (user?.name) {
@@ -109,8 +148,7 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     }
   }, [user]);
 
-  useEffect(() => {
-    // Fetch initial data for products and categories
+  // Define fetchInitialData before using it in useEffect
     const fetchInitialData = async () => {
       setIsLoading(true);
       try {
@@ -146,8 +184,39 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
         setIsLoading(false);
       }
     };
+  
+  // Fetch initial data and verify rewards when component mounts
+  useEffect(() => {
     fetchInitialData();
-  }, [user?.internalId, isCustomer]); // Re-fetch if user changes
+    
+    // Verify rewards status after a short delay to ensure rewards are loaded
+    const timer = setTimeout(() => {
+      if (isCustomer && availableRewards.length > 0) {
+        verifyRewardsStatus(availableRewards.map(r => r.id));
+      }
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, [user?.internalId, isCustomer, availableRewards.length]); // Re-fetch if user changes or rewards change
+
+  // Fetch rewards when user changes or after login
+  useEffect(() => {
+    if (isCustomer && user?.internalId) {
+      fetchCustomerRewards();
+    }
+  }, [user]);
+
+  // Verify rewards status when available rewards change
+  useEffect(() => {
+    if (isCustomer && user?.internalId && availableRewards.length > 0) {
+      // Use a timeout to avoid excessive calls
+      const timer = setTimeout(() => {
+        verifyRewardsStatus(availableRewards.map(r => r.id));
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [availableRewards, isCustomer, user?.internalId]);
 
   const fetchProductOptions = useCallback(async (productId: string): Promise<OptionCategory[]> => {
     if (productOptionsCache[productId]) {
@@ -228,7 +297,7 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
       const mappedCategories = data.map((category: any) => ({
         id: String(category.category_id),
         name: category.name,
-        image_url: category.image_url,
+        image_url: category.image_url,  // Properly include the image_url
       }));
       
       setCategories(mappedCategories);
@@ -414,117 +483,106 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
     };
 
    const fetchCustomerRewards = async () => {
-    console.log('[fetchCustomerRewards] Starting fetch...');
-    console.log('[fetchCustomerRewards] isCustomer:', isCustomer);
-    
-    // Don't attempt to fetch rewards if user is not a customer or not logged in
-    if (!isCustomer || !user) {
-        console.log('[fetchCustomerRewards] Skipping fetch for non-customer users or non-logged in users');
-        return;
+    if (!user || user.role !== 'customer' || !user.internalId) {
+      console.log('[fetchCustomerRewards] Not a customer or no ID, skipping rewards fetch');
+      setRewardsLoading(false);
+      return;
     }
     
     setRewardsLoading(true);
-    setRewardsError(null);
     
     try {
-        const token = localStorage.getItem('authToken');
+      const token = localStorage.getItem('authToken');
+      const headers = { 
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      };
+      
+      // Get claimed rewards
+      const claimedResponse = await fetch(`http://localhost:3001/api/rewards/claimed-only`, { headers });
+      
+      if (!claimedResponse.ok) {
+        throw new Error(`Failed to fetch claimed rewards: ${claimedResponse.statusText}`);
+      }
+      
+      const claimedRewards: AvailableReward[] = await claimedResponse.json();
+      
+      // Get available (active but not yet claimed) rewards
+      const availableResponse = await fetch(`http://localhost:3001/api/rewards/available`, { headers });
+      
+      if (!availableResponse.ok) {
+        throw new Error(`Failed to fetch available rewards: ${availableResponse.statusText}`);
+      }
+      
+      const eligibleRewards: AvailableReward[] = await availableResponse.json();
+      
+      // Check for newly redeemed rewards (marked by Rewards.tsx)
+      const newlyRedeemedFlags: Record<string, boolean> = {};
+      
+      // Combine claimed and eligible rewards
+      const combinedRewards = [
+        ...claimedRewards.map(reward => ({
+          ...reward,
+          isClaimed: true,
+          isEligible: true,
+          isNewlyRedeemed: Boolean(localStorage.getItem(`newly_redeemed_${reward.id}_${user.internalId}`))
+        })),
+        ...eligibleRewards.map(reward => ({
+          ...reward,
+          isEligible: true,
+          isNewlyRedeemed: Boolean(localStorage.getItem(`newly_redeemed_${reward.id}_${user.internalId}`))
+        }))
+      ];
+      
+      // Filter out any rewards that were redeemed in previous sessions (stored in localStorage)
+      const filteredRewards = combinedRewards.filter(reward => {
+        // Check if this reward is marked as redeemed in localStorage
+        const storageKey = `redeemed_reward_${reward.id}${reward.instanceId ? '_' + reward.instanceId : ''}`;
+        const isRedeemedInLocalStorage = localStorage.getItem(storageKey) === 'true';
         
-        // Fetch both available rewards and claimed rewards separately
-        let availableRewardsData: AvailableReward[] = [];
-        let claimedRewardsData: AvailableReward[] = [];
+        // Also check if this reward is in the currently selected rewards
+        const isCurrentlySelected = selectedRewards.some(
+          selectedReward => selectedReward.id === reward.id && 
+          (reward.isVoucher ? selectedReward.instanceId === reward.instanceId : true)
+        );
         
-        // 1. Fetch available rewards
-        try {
-            console.log('[fetchCustomerRewards] Fetching available rewards...');
-            const availableResponse = await fetch(`http://localhost:3001/api/rewards/available`, {
-            headers: {
-                ...(token && { 'Authorization': `Bearer ${token}` }),
-            },
-        });
-            
-            if (availableResponse.ok) {
-                availableRewardsData = await availableResponse.json();
-                console.log('[fetchCustomerRewards] Available rewards data:', availableRewardsData);
-            } else {
-                const errorText = await availableResponse.text();
-                console.error('[fetchCustomerRewards] Error fetching available rewards:', errorText);
-            }
-        } catch (error) {
-            console.error('[fetchCustomerRewards] Exception fetching available rewards:', error);
-        }
-        
-        // 2. Fetch claimed rewards
-        if (user?.internalId) {
-            try {
-                console.log('[fetchCustomerRewards] Fetching claimed rewards for user:', user.internalId);
-                const claimedResponse = await fetch(`http://localhost:3001/api/rewards/customer/${user.internalId}/claimed`, {
-                    headers: {
-                        ...(token && { 'Authorization': `Bearer ${token}` }),
-                    },
-                });
-                
-                if (claimedResponse.ok) {
-                    claimedRewardsData = await claimedResponse.json();
-                    console.log('[fetchCustomerRewards] Claimed rewards:', claimedRewardsData);
-                } else {
-                    const errorText = await claimedResponse.text();
-                    console.error('[fetchCustomerRewards] Error fetching claimed rewards:', errorText);
-                }
-            } catch (error) {
-                console.error('[fetchCustomerRewards] Exception fetching claimed rewards:', error);
-            }
-        }
-        
-        // 3. Combine rewards - use claimed rewards first, then available rewards not already claimed
-        const combinedRewards = [
-            ...claimedRewardsData.map(reward => ({
-                ...reward,
-                isClaimed: true,
-                freeMenuItemIds: reward.freeMenuItemIds || [], // Ensure freeMenuItemIds is always an array
-                isNewlyRedeemed: localStorage.getItem(`newly_redeemed_${reward.id}_${user?.internalId}`) === 'true'
-            })),
-            ...availableRewardsData.filter(reward => 
-                !claimedRewardsData.some(claimed => 
-                    claimed.id === reward.id && (reward.isVoucher ? claimed.instanceId === reward.instanceId : true)
-                )
-            ).map(reward => ({
-                ...reward,
-                freeMenuItemIds: reward.freeMenuItemIds || [] // Ensure freeMenuItemIds is always an array
-            }))
-        ];
-        
-        // Filter out any rewards that were redeemed in previous sessions (stored in localStorage)
-        const filteredRewards = combinedRewards.filter(reward => {
-            const key = `redeemed_reward_${reward.id}${reward.instanceId ? '_' + reward.instanceId : ''}`;
-            return localStorage.getItem(key) !== 'true';
+        // Keep only rewards that haven't been redeemed and aren't currently selected
+        return !isRedeemedInLocalStorage && !isCurrentlySelected;
+      });
+      
+      console.log('[fetchCustomerRewards] Combined rewards:', combinedRewards);
+      console.log('[fetchCustomerRewards] Filtered rewards after redemption check:', filteredRewards);
+      setAvailableRewards(filteredRewards);
+      
+      // Check for newly redeemed rewards
+      const newlyRedeemedRewards = combinedRewards.filter(r => r.isNewlyRedeemed);
+      if (newlyRedeemedRewards.length > 0) {
+        setShowRewardsModal(true);
+        newlyRedeemedRewards.forEach(reward => {
+          localStorage.removeItem(`newly_redeemed_${reward.id}_${user?.internalId}`);
         });
         
-        console.log('[fetchCustomerRewards] Combined rewards:', combinedRewards);
-        console.log('[fetchCustomerRewards] Filtered rewards after redemption check:', filteredRewards);
-        setAvailableRewards(filteredRewards);
-        
-        // Check for newly redeemed rewards
-        const newlyRedeemedRewards = combinedRewards.filter(r => r.isNewlyRedeemed);
-        if (newlyRedeemedRewards.length > 0) {
-            setShowRewardsModal(true);
-            newlyRedeemedRewards.forEach(reward => {
-                localStorage.removeItem(`newly_redeemed_${reward.id}_${user?.internalId}`);
-            });
-            
-            toast.success(
-                newlyRedeemedRewards.length === 1 
-                ? `New reward available: ${newlyRedeemedRewards[0].name}!` 
-                : `${newlyRedeemedRewards.length} new rewards available!`
-            );
-        }
+        toast.success(
+          newlyRedeemedRewards.length === 1 
+            ? `New reward available: ${newlyRedeemedRewards[0].name}!` 
+            : `${newlyRedeemedRewards.length} new rewards available!`
+        );
+      }
+      
+      // Verify rewards status with server to ensure our local state is accurate
+      if (filteredRewards.length > 0) {
+        setTimeout(() => {
+          verifyRewardsStatus(filteredRewards.map(r => r.id));
+        }, 1000);
+      }
     } catch (err: any) {
-        console.error("[fetchCustomerRewards] Error:", err);
-        setRewardsError(err.message || "Could not load your rewards.");
+      console.error("[fetchCustomerRewards] Error:", err);
+      setRewardsError(err.message || "Could not load your rewards.");
     } finally {
-    setRewardsLoading(false);
-        console.log('[fetchCustomerRewards] Completed fetch');
+      setRewardsLoading(false);
+      console.log('[fetchCustomerRewards] Completed fetch');
     }
-   };
+  };
 
    const applyReward = (reward: AvailableReward) => {
     // Skip if reward is not eligible and not claimed
@@ -671,6 +729,13 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
       recalculateDiscount();
     }
    }, [orderItems]);
+
+   // --- Fetch rewards whenever component mounts or user changes ---
+   useEffect(() => {
+    if (isCustomer && user?.internalId) {
+      fetchCustomerRewards();
+    }
+  }, [user]);
 
    // --- Checkout Logic ---
    const handleCheckout = async () => {
@@ -1226,16 +1291,40 @@ const Menu: React.FC<MenuPageProps> = ({ placeNewOrder, user }): React.ReactNode
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <select 
-            className="p-3 border border-stone-300 rounded-lg bg-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-shadow appearance-none"
-            value={selectedCategory || ''}
-            onChange={(e) => setSelectedCategory(e.target.value || null)}
-          >
-            <option value="">All Categories</option>
+          
+          {/* Categories as buttons with images */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <button
+              onClick={() => setSelectedCategory(null)}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                !selectedCategory
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                  : 'bg-white text-gray-600 hover:bg-gray-50 border border-stone-200'
+              }`}
+            >
+              All Categories
+            </button>
             {categories.map(category => (
-              <option key={category.id} value={category.id}>{category.name}</option>
+              <button
+                key={category.id}
+                onClick={() => setSelectedCategory(category.id)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${
+                  selectedCategory === category.id
+                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                    : 'bg-white text-gray-600 hover:bg-gray-50 border border-stone-200'
+                }`}
+              >
+                {category.image_url && (
+                  <img
+                    src={category.image_url}
+                    alt={category.name}
+                    className="w-6 h-6 object-cover rounded"
+                  />
+                )}
+                <span>{category.name}</span>
+              </button>
             ))}
-          </select>
+          </div>
         </div>
 
         {/* Product Grid - Now takes remaining height and scrolls */} 
