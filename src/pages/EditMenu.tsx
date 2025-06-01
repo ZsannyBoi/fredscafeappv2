@@ -116,7 +116,6 @@ const EditMenu: React.FC = () => {
   const [isAddingOption, setIsAddingOption] = useState<boolean>(false);
   const [editingOption, setEditingOption] = useState<ProductOption | null>(null);
   const [optionFormLabel, setOptionFormLabel] = useState('');
-  const [optionFormValue, setOptionFormValue] = useState(''); // New state for option value
   const [optionFormPriceModifier, setOptionFormPriceModifier] = useState('');
 
   // Initialize form productType with activeCategory when component loads or categories change
@@ -1117,7 +1116,6 @@ const EditMenu: React.FC = () => {
       option_group_id: selectedOptionGroupForOptions.option_group_id, 
       label: optionFormLabel.trim(),
       price_modifier: optionFormPriceModifier.trim() === '' ? null : parseFloat(optionFormPriceModifier),
-      value: optionFormValue.trim() || undefined, // Include value
     };
     console.log('[EditMenu] Adding option to group with payload:', payload); // Log payload
 
@@ -1141,7 +1139,6 @@ const EditMenu: React.FC = () => {
         id: String(newOptionFromApi.option_id),
         label: newOptionFromApi.label,
         priceModifier: newOptionFromApi.price_modifier !== null && newOptionFromApi.price_modifier !== undefined ? parseFloat(newOptionFromApi.price_modifier) : undefined,
-        value: newOptionFromApi.value || '' 
       };
       console.log('[EditMenu] Prepared new option for state:', newOptionForState);
 
@@ -1150,7 +1147,6 @@ const EditMenu: React.FC = () => {
 
       setIsAddingOption(false);
       setOptionFormLabel('');
-      setOptionFormValue(''); 
       setOptionFormPriceModifier('');
       alert('Option added successfully!');
 
@@ -1176,7 +1172,6 @@ const EditMenu: React.FC = () => {
     const payload = {
       label: optionFormLabel.trim(),
       price_modifier: optionFormPriceModifier.trim() === '' ? null : parseFloat(optionFormPriceModifier),
-      value: optionFormValue.trim() || undefined, // Include value
     };
     console.log(`[EditMenu] Updating option ${editingOption.id} with payload:`, payload);
 
@@ -1200,7 +1195,6 @@ const EditMenu: React.FC = () => {
         id: String(updatedOptionFromApi.option_id),
         label: updatedOptionFromApi.label,
         priceModifier: updatedOptionFromApi.price_modifier !== null && updatedOptionFromApi.price_modifier !== undefined ? parseFloat(updatedOptionFromApi.price_modifier) : undefined,
-        value: updatedOptionFromApi.value || '' 
       };
       console.log('[EditMenu] Prepared updated option for state:', updatedOptionForState);
 
@@ -1210,7 +1204,6 @@ const EditMenu: React.FC = () => {
       setIsAddingOption(false); 
       setEditingOption(null);   
       setOptionFormLabel('');
-      setOptionFormValue(''); 
       setOptionFormPriceModifier('');
       alert('Option updated successfully!');
 
@@ -1988,7 +1981,7 @@ const EditMenu: React.FC = () => {
                                             <span>{opt.label} {opt.priceModifier ? `(+$${opt.priceModifier.toFixed(2)})` : ''}</span>
                                             <div className="space-x-1.5">
                                                 <button 
-                                                    onClick={() => { setEditingOption(opt); setIsAddingOption(true); setOptionFormLabel(opt.label); setOptionFormValue(opt.value || ''); setOptionFormPriceModifier(String(opt.priceModifier || '')); }} 
+                                                    onClick={() => { setEditingOption(opt); setIsAddingOption(true); setOptionFormLabel(opt.label); setOptionFormPriceModifier(String(opt.priceModifier || '')); }} 
                                                     className="text-xs px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded"
                                                 >
                                                     Edit
@@ -2007,7 +2000,7 @@ const EditMenu: React.FC = () => {
                                 {/* Add/Edit Option Form */}
                                 {!isAddingOption && (
                                     <button 
-                                        onClick={() => { setIsAddingOption(true); setEditingOption(null); setOptionFormLabel(''); setOptionFormValue(''); setOptionFormPriceModifier(''); }} 
+                                        onClick={() => { setIsAddingOption(true); setEditingOption(null); setOptionFormLabel(''); setOptionFormPriceModifier(''); }} 
                                         className="text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600"
                                     >
                                         + Add Option
@@ -2021,10 +2014,6 @@ const EditMenu: React.FC = () => {
                                             <input type="text" value={optionFormLabel} onChange={(e) => setOptionFormLabel(e.target.value)} className="form-input w-full text-sm mt-0.5" />
                                         </div>
                                         <div>
-                                            <label className="text-xs text-gray-600">Value (optional, for internal use or if different from label)</label>
-                                            <input type="text" value={optionFormValue} onChange={(e) => setOptionFormValue(e.target.value)} className="form-input w-full text-sm mt-0.5" />
-                                        </div>
-                                        <div>
                                             <label className="text-xs text-gray-600">Price Modifier (e.g., 0.50 or -0.25)</label>
                                             <input type="number" step="0.01" value={optionFormPriceModifier} onChange={(e) => setOptionFormPriceModifier(e.target.value)} className="form-input w-full text-sm mt-0.5" />
                                         </div>
@@ -2036,7 +2025,7 @@ const EditMenu: React.FC = () => {
                                             >
                                                 {editingOption ? 'Save Changes' : 'Add Option'}
                                             </button>
-                                            <button onClick={() => { setIsAddingOption(false); setEditingOption(null); setOptionFormLabel(''); setOptionFormValue(''); setOptionFormPriceModifier(''); }} className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded">Cancel</button>
+                                            <button onClick={() => { setIsAddingOption(false); setEditingOption(null); setOptionFormLabel(''); setOptionFormPriceModifier(''); }} className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded">Cancel</button>
                                         </div>
                                     </div>
                                 )}

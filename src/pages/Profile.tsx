@@ -559,8 +559,10 @@ const Profile: React.FC<ProfilePageProps> = ({ user, updateUser }) => {
           </form>
         </div>
         
-        {/* Membership Manager Component */}
-        <MembershipManager user={user} updateUser={updateUser} />
+        {/* Membership Manager Component (only for customers and managers) */}
+        {(user?.role === 'customer' || user?.role === 'manager') && (
+          <MembershipManager user={user} updateUser={updateUser} />
+        )}
       </div>
     </div>
   );

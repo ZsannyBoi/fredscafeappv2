@@ -76,7 +76,10 @@ const TestApproval: React.FC = () => {
   // Fetch user name for better display
   const fetchUserName = async (userId: string): Promise<string> => {
     try {
-      const response = await fetch(`http://localhost:3001/api/users/${userId}`);
+      const token = localStorage.getItem('authToken');
+      const headers: Record<string,string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`http://localhost:3001/api/users/${userId}`, { headers });
       if (response.ok) {
         const userData = await response.json();
         return userData.name || 'Unknown User';
@@ -144,29 +147,35 @@ const TestApproval: React.FC = () => {
 
     try {
       if (approvalData.type === 'checkout') {
-        const response = await fetch('http://localhost:3001/api/orders/approve-checkout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ orderId: approvalData.data.orderId }),
-        });
+      const response = await fetch('http://localhost:3001/api/orders/approve-checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId: approvalData.data.orderId }),
+      });
 
-        if (!response.ok) {
-          throw new Error('Failed to approve order');
-        }
+      if (!response.ok) {
+        throw new Error('Failed to approve order');
+      }
 
-        // Send message to parent window
-        if (window.opener) {
-          window.opener.postMessage({ type: 'ORDER_COMPLETED' }, '*');
+      // Send message to parent window
+      if (window.opener) {
+        window.opener.postMessage({ type: 'ORDER_COMPLETED' }, '*');
         }
       } else if (approvalData.type === 'membership') {
-        const response = await fetch(`http://localhost:3001/api/memberships/${approvalData.data.transactionId}/approve`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
+        const token = localStorage.getItem('authToken');
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(
+          `http://localhost:3001/api/memberships/${approvalData.data.transactionId}/approve`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            }
           }
-        });
+        );
 
         if (!response.ok) {
           throw new Error('Failed to approve membership');
@@ -196,32 +205,38 @@ const TestApproval: React.FC = () => {
 
     try {
       if (approvalData.type === 'checkout') {
-        const response = await fetch('http://localhost:3001/api/orders/reject-checkout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ orderId: approvalData.data.orderId }),
-        });
+      const response = await fetch('http://localhost:3001/api/orders/reject-checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId: approvalData.data.orderId }),
+      });
 
-        if (!response.ok) {
-          throw new Error('Failed to reject order');
-        }
+      if (!response.ok) {
+        throw new Error('Failed to reject order');
+      }
 
-        // Send message to parent window
-        if (window.opener) {
-          window.opener.postMessage({ 
-            type: 'ORDER_REJECTED',
-            reason: 'Order was rejected by the approver'
-          }, '*');
+      // Send message to parent window
+      if (window.opener) {
+        window.opener.postMessage({ 
+          type: 'ORDER_REJECTED',
+          reason: 'Order was rejected by the approver'
+        }, '*');
         }
       } else if (approvalData.type === 'membership') {
-        const response = await fetch(`http://localhost:3001/api/memberships/${approvalData.data.transactionId}/reject`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
+        const token = localStorage.getItem('authToken');
+        if (!token) throw new Error('Authentication required');
+        const response = await fetch(
+          `http://localhost:3001/api/memberships/${approvalData.data.transactionId}/reject`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            }
           }
-        });
+        );
 
         if (!response.ok) {
           throw new Error('Failed to reject membership');
@@ -365,14 +380,14 @@ const TestApproval: React.FC = () => {
               disabled={loading}
               className="flex-1 bg-red-500 text-white py-2 px-4 rounded hover:bg-red-600 disabled:opacity-50"
             >
-              {loading ? 'Processing...' : 'Reject'}
+              {loading ? 'Processing...' : 'Cancel Payment'}
             </button>
             <button
               onClick={handleApprove}
               disabled={loading}
               className="flex-1 bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 disabled:opacity-50"
             >
-              {loading ? 'Processing...' : 'Approve'}
+              {loading ? 'Processing...' : 'Confirm Payment'}
             </button>
           </div>
         </div>

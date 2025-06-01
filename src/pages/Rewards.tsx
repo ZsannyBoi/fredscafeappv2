@@ -12,6 +12,37 @@ const safeJsonParse = (jsonString: string, defaultValue = {}) => {
   }
 };
 
+// Define interface for points history data
+interface PointsHistoryData {
+  currentPoints: number;
+  pointsEarnedThisMonth: number;
+  pointsRedeemedThisMonth: number;
+  transactions: PointsTransaction[];
+  pointsInfo: {
+    baseRate: string;
+    bonusTiers: {
+      threshold: string;
+      bonus: string;
+    }[];
+    frequencyBonus?: {
+      threshold: string;
+      bonus: string;
+    };
+    exampleCalculation: string;
+  };
+}
+
+interface PointsTransaction {
+  id: number;
+  points: number;
+  transaction_type: 'earned' | 'redeemed';
+  transaction_date: string;
+  notes?: string;
+  order_id?: string;
+  order_amount?: number;
+  order_customer_name?: string;
+}
+
 // Define interface for Reward data AS DISPLAYED ON THIS PAGE (includes dynamic status)
 interface UIRewardItem {
     id: string;
@@ -298,6 +329,11 @@ const Rewards: React.FC<RewardsProps> = ({
     const [claimedStatusOverrides, setClaimedStatusOverrides] = useState<Record<string, boolean>>({}); // Track claimed status locally after successful API call
     const [claimingRewardId, setClaimingRewardId] = useState<string | null>(null); // Track which reward is being claimed
     const [claimingError, setClaimingError] = useState<string | null>(null); // Track claiming errors
+    
+    // --- Points History State ---
+    const [showPointsHistory, setShowPointsHistory] = useState<boolean>(false);
+    const [pointsHistory, setPointsHistory] = useState<PointsHistoryData | null>(null);
+    const [loadingPointsHistory, setLoadingPointsHistory] = useState<boolean>(false);
 
     // --- Fetch Rewards and Customer Info --- 
     useEffect(() => {
@@ -540,6 +576,40 @@ const Rewards: React.FC<RewardsProps> = ({
         }
     };
 
+    // --- Points History Fetch Function ---
+    const fetchPointsHistory = async () => {
+        if (!targetCustomerId) return;
+        
+        setLoadingPointsHistory(true);
+        try {
+            const token = localStorage.getItem('authToken');
+            const response = await fetch('http://localhost:3001/api/customers/points-history', {
+                headers: {
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch points history: ${response.statusText}`);
+            }
+            
+            const data: PointsHistoryData = await response.json();
+            setPointsHistory(data);
+        } catch (error: any) {
+            console.error('Error fetching points history:', error);
+            toast.error(error.message || 'Failed to load points history');
+        } finally {
+            setLoadingPointsHistory(false);
+        }
+    };
+
+    // Fetch points history when component mounts or targetCustomerId changes
+    useEffect(() => {
+        if (showPointsHistory && !pointsHistory && !loadingPointsHistory) {
+            fetchPointsHistory();
+        }
+    }, [showPointsHistory, targetCustomerId]);
+
   // --- Render Logic (Check for loading/error states first) ---
   if (isLoading) {
     return <div className="p-6">Loading rewards data...</div>;
@@ -559,141 +629,287 @@ const Rewards: React.FC<RewardsProps> = ({
              <h1 className="text-3xl font-semibold text-brown-900 mb-6">Rewards</h1>
 
             {/* Top Customer Info Banner - Uses fetched customerInfo */}
-            <div className="bg-emerald-200 p-6 rounded-t-2xl flex items-center space-x-4 mb-6 shadow-sm border-b border-emerald-300">
-                    <img src={customerInfo.avatar || '/src/assets/person.svg'} alt="Customer Avatar" className="w-12 h-12 object-contain bg-white rounded-full p-1" />
-                 <div>
-                    <h2 className="text-xl font-semibold text-gray-800">{customerInfo.name}</h2>
-                        <p className="text-emerald-800 text-sm">ID: {customerInfo.id} {customerInfo.membershipTier && `| Tier: ${customerInfo.membershipTier}`}</p>
-                        <p className="text-emerald-700 text-sm">Points: {customerInfo.loyaltyPoints}</p>
-                 </div>
-            </div>
-            
-             {/* All Rewards Section */}
-             <div className="flex justify-between items-center mb-4">
-                 <h3 className="text-xl font-semibold text-brown-800">Available Rewards & Vouchers</h3>
-                 <div className="relative w-64">
-                      <input 
-                         type="text" 
-                         placeholder="Search for a reward" 
-                         value={rewardSearchTerm}
-                         onChange={(e) => setRewardSearchTerm(e.target.value)}
-                         className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm"
-                      />
-                      <img src="/src/assets/search.svg" alt="Search" className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                 </div>
-             </div>
+            <div className="bg-emerald-200 p-6 rounded-t-2xl flex items-center justify-between mb-6 shadow-sm border-b border-emerald-300">
+                <div className="flex items-center space-x-4">
+                    <img src={customerInfo?.avatar || '/src/assets/person.svg'} alt="Customer Avatar" className="w-12 h-12 object-contain bg-white rounded-full p-1" />
+                    <div>
+                        <h2 className="text-xl font-semibold text-gray-800">{customerInfo?.name}</h2>
+                        <p className="text-emerald-800 text-sm">ID: {customerInfo?.id} {customerInfo?.membershipTier && `| Tier: ${customerInfo.membershipTier}`}</p>
+                        <p className="text-emerald-700 text-sm">Points: {customerInfo?.loyaltyPoints}</p>
+                    </div>
+                </div>
 
-             {/* Rewards Grid - Uses processedRewards, getButtonProps, handleClaimReward */} 
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-5 overflow-y-auto pr-2 flex-1">
-                {filteredRewards.map((reward: UIRewardItem) => {
-                    const buttonProps = getButtonProps(reward);
-                    const identifier = reward.isVoucher ? reward.instanceId : reward.id;
-                    return (
-                         <div 
-                            key={identifier} 
-                            onClick={() => handleSelectReward(reward)}
-                            className={`bg-white rounded-2xl p-4 shadow border hover:shadow-md transition-shadow cursor-pointer flex flex-col ${selectedReward?.id === reward.id && selectedReward?.instanceId === reward.instanceId ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'}`}>
-                             <img src={reward.image || '/src/assets/rewards.png'} alt={reward.name} className="w-24 h-24 object-contain mx-auto mb-3" />
-                             <h4 className="text-md font-semibold text-brown-900 mb-2 text-center flex-1">{reward.name} {reward.isVoucher && <span className="text-xs text-emerald-600 block">(Voucher)</span>}</h4>
-                             <button 
-                                onClick={(e) => {
-                                     e.stopPropagation(); 
-                                     if (reward.currentStatus === 'Claim' || reward.currentStatus === 'ActiveVoucher') {
-                                         handleClaimReward(reward.id, reward.instanceId);
-                                     }
-                                }}
-                                className={`w-full py-2 rounded-lg text-white text-sm font-medium transition-colors ${buttonProps.className}`}
-                                disabled={buttonProps.disabled || isClaiming === identifier} // Disable if claiming this specific one
-                             >
-                                {buttonProps.text}
-                            </button>
-                        </div>
-                    );
-                })}
-                 {filteredRewards.length === 0 && (
-                     <p className="text-gray-500 col-span-full text-center mt-10">No rewards found{rewardSearchTerm ? ` matching "${rewardSearchTerm}"` : ''}.</p>
-                 )}
-            </div>
-        </div>
-
-        {/* Right Sidebar - Uses selectedReward and customerInfo */} 
-        <div className="w-80 bg-white rounded-2xl p-5 shadow flex flex-col border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-brown-800">Reward details</h2>
-                 <button 
-                    onClick={() => setSelectedReward(null)}
-                    title="Close Details"
-                    className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center hover:bg-red-200 transition-colors">
-                     <img src="/src/assets/delete.svg" alt="Close Details" className="w-4 h-4" />
+                {/* Points History Toggle Button */}
+                <button 
+                    onClick={() => setShowPointsHistory(!showPointsHistory)}
+                    className={`px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors ${showPointsHistory ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                >
+                    {showPointsHistory ? 'View Rewards' : 'View Points History'}
                 </button>
             </div>
+            
+            {showPointsHistory ? (
+                /* Points History Section */
+                <div className="flex flex-col flex-1 overflow-hidden">
+                    <h3 className="text-xl font-semibold text-brown-800 mb-4">Points History & Earning Rules</h3>
+                    
+                    {loadingPointsHistory ? (
+                        <div className="flex-1 flex items-center justify-center">
+                            <p className="text-gray-500">Loading points history...</p>
+                        </div>
+                    ) : pointsHistory ? (
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 overflow-auto">
+                            {/* Points Summary Card */}
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                                <h4 className="text-lg font-semibold text-brown-800 mb-4">Points Summary</h4>
+                                <div className="space-y-3">
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Current Balance</span>
+                                        <span className="text-lg font-semibold text-emerald-600">{pointsHistory.currentPoints} pts</span>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-gray-600">Earned This Month</span>
+                                        <span className="text-green-600">+{pointsHistory.pointsEarnedThisMonth} pts</span>
+                                    </div>
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Redeemed This Month</span>
+                                        <span className="text-red-600">-{pointsHistory.pointsRedeemedThisMonth} pts</span>
+                                    </div>
+                                </div>
+                            </div>
 
-            {selectedReward && customerInfo ? (
+                            {/* Points Earning Rules Card */}
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                                <h4 className="text-lg font-semibold text-brown-800 mb-4">Points Earning Rules</h4>
+                                <div className="space-y-3">
+                                    <div className="mb-2">
+                                        <p className="text-gray-700 font-medium">Base Rate</p>
+                                        <p className="text-emerald-600">{pointsHistory.pointsInfo.baseRate}</p>
+                                    </div>
+                                    <div className="mb-2">
+                                        <p className="text-gray-700 font-medium">Bonus Tiers</p>
+                                        <ul className="list-disc pl-5 text-sm">
+                                            {pointsHistory.pointsInfo.bonusTiers.map((tier: { threshold: string; bonus: string }, idx: number) => (
+                                                <li key={idx} className="text-gray-600">
+                                                    <span className="font-medium">{tier.threshold}</span>: {tier.bonus}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                    {pointsHistory.pointsInfo.frequencyBonus && (
+                                        <div className="mb-2">
+                                            <p className="text-gray-700 font-medium">Frequency Bonus</p>
+                                            <p className="text-emerald-600">{pointsHistory.pointsInfo.frequencyBonus.threshold}: {pointsHistory.pointsInfo.frequencyBonus.bonus}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Example Calculation Card */}
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                                <h4 className="text-lg font-semibold text-brown-800 mb-4">Example Calculation</h4>
+                                <pre className="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 p-3 rounded-lg">
+                                    {pointsHistory.pointsInfo.exampleCalculation}
+                                </pre>
+                            </div>
+
+                            {/* Transaction History Table - Spans all columns */}
+                            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 lg:col-span-3">
+                                <h4 className="text-lg font-semibold text-brown-800 mb-4">Transaction History</h4>
+                                
+                                {pointsHistory.transactions.length > 0 ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full divide-y divide-gray-200">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Amount</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="bg-white divide-y divide-gray-200">
+                                                {pointsHistory.transactions.map((transaction: PointsTransaction) => (
+                                                    <tr key={transaction.id} className="hover:bg-gray-50">
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                                                            {new Date(transaction.transaction_date).toLocaleDateString()}
+                                                        </td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                                            <span className={`inline-flex px-2 py-1 text-xs rounded-full ${
+                                                                transaction.transaction_type === 'earned' 
+                                                                    ? 'bg-green-100 text-green-800' 
+                                                                    : 'bg-red-100 text-red-800'
+                                                            }`}>
+                                                                {transaction.transaction_type === 'earned' ? 'Earned' : 'Redeemed'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                                            <span className={transaction.transaction_type === 'earned' ? 'text-green-600' : 'text-red-600'}>
+                                                                {transaction.transaction_type === 'earned' ? '+' : '-'}{transaction.points}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
+                                                            {transaction.order_amount != null
+                                                              ? `$${(
+                                                                  typeof transaction.order_amount === 'string'
+                                                                    ? parseFloat(transaction.order_amount)
+                                                                    : transaction.order_amount
+                                                              ).toFixed(2)}`
+                                                              : '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-sm text-gray-700">
+                                                            {transaction.notes || '-'}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-500 text-center py-4">No transaction history available.</p>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex-1 flex items-center justify-center">
+                            <p className="text-gray-500">No points history available.</p>
+                        </div>
+                    )}
+                </div>
+            ) : (
+                /* Existing Rewards Section */
                 <>
-                    <div className="mb-4 border-b border-gray-100 pb-4">
-                        <p className="text-xs text-gray-500 mb-1">Customer</p>
-                        <p className="font-medium text-gray-800">{customerInfo.name} <span className="text-gray-400 text-xs">(ID: {customerInfo.id})</span></p>
+                    {/* All Rewards Section */}
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-xl font-semibold text-brown-800">Available Rewards & Vouchers</h3>
+                        <div className="relative w-64">
+                            <input 
+                                type="text" 
+                                placeholder="Search for a reward" 
+                                value={rewardSearchTerm}
+                                onChange={(e) => setRewardSearchTerm(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-brown-400 text-sm"
+                            />
+                            <img src="/src/assets/search.svg" alt="Search" className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        </div>
                     </div>
 
-                     <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-4 text-sm">
-                        <div className="flex items-start gap-3 mb-3">
-                             <img src={selectedReward.image || '/src/assets/rewards.png'} alt={selectedReward.name} className="w-12 h-12 object-contain bg-gray-50 rounded-md p-1 border"/>
-                             <div className="flex-1">
-                                 <p className="text-md font-medium text-gray-800">{selectedReward.name}</p>
-                                 <p className={`text-sm font-medium ${selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher' ? 'text-green-600' : selectedReward.currentStatus === 'Claimed' ? 'text-blue-600' : 'text-gray-500'}`}>
-                                    {selectedReward.currentStatus.replace('ActiveVoucher', 'Active Voucher')}
-                                 </p>
-                             </div>
-                         </div>
-                         
-                         {selectedReward.description && <DetailItem label="Description" value={selectedReward.description} />}
-                         <DetailItem label="Eligibility / Progress" value={selectedReward.progressMessage} />
-                         {selectedReward.isVoucher && selectedReward.instanceId && <DetailItem label="Voucher ID" value={selectedReward.instanceId} />}
-                         {selectedReward.pointsCost && !selectedReward.isVoucher && <DetailItem label="Cost to Redeem" value={`${selectedReward.pointsCost} points`} />}
-                         {selectedReward.type && <DetailItem label="Reward Type" value={selectedReward.type.replace('manual_grant', 'Manually Granted').replace('discount_coupon', 'Discount').replace('loyalty_tier_perk', 'Tier Perk')} />}
-                         {selectedReward.criteria?.minSpendPerTransaction && <DetailItem label="Min. Spend/Trans." value={`$${selectedReward.criteria.minSpendPerTransaction.toFixed(2)}`} />}
-                         {selectedReward.criteria?.cumulativeSpendTotal && <DetailItem label="Total Spend Required" value={`$${selectedReward.criteria.cumulativeSpendTotal.toFixed(2)}`} />}
-                     </div>
+                    {/* Rewards Grid - Uses processedRewards, getButtonProps, handleClaimReward */} 
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-5 overflow-y-auto pr-2 flex-1">
+                        {filteredRewards.map((reward: UIRewardItem) => {
+                            const buttonProps = getButtonProps(reward);
+                            const identifier = reward.isVoucher ? reward.instanceId : reward.id;
+                            return (
+                                <div 
+                                    key={identifier} 
+                                    onClick={() => handleSelectReward(reward)}
+                                    className={`bg-white rounded-2xl p-4 shadow border hover:shadow-md transition-shadow cursor-pointer flex flex-col ${selectedReward?.id === reward.id && selectedReward?.instanceId === reward.instanceId ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'}`}>
+                                    <img src={reward.image || '/src/assets/rewards.png'} alt={reward.name} className="w-24 h-24 object-contain mx-auto mb-3" />
+                                    <h4 className="text-md font-semibold text-brown-900 mb-2 text-center flex-1">{reward.name} {reward.isVoucher && <span className="text-xs text-emerald-600 block">(Voucher)</span>}</h4>
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation(); 
+                                            if (reward.currentStatus === 'Claim' || reward.currentStatus === 'ActiveVoucher') {
+                                                handleClaimReward(reward.id, reward.instanceId);
+                                            }
+                                        }}
+                                        className={`w-full py-2 rounded-lg text-white text-sm font-medium transition-colors ${buttonProps.className}`}
+                                        disabled={buttonProps.disabled || isClaiming === identifier} // Disable if claiming this specific one
+                                    >
+                                        {buttonProps.text}
+                                    </button>
+                                </div>
+                            );
+                        })}
+                        {filteredRewards.length === 0 && (
+                            <p className="text-gray-500 col-span-full text-center mt-10">No rewards found{rewardSearchTerm ? ` matching "${rewardSearchTerm}"` : ''}.</p>
+                        )}
+                    </div>
+                </>
+            )}
+        </div>
 
-                     {/* Totals Section (may not apply for free rewards) */}
-                     <div className="space-y-1 text-sm mb-4 border-t border-gray-100 pt-3">
-                         <div className="flex justify-between text-gray-600">
-                             <span>Subtotal</span>
-                             <span>$0.00</span>
-                         </div>
-                         <div className="flex justify-between font-semibold text-lg text-brown-900 pt-1 border-t border-gray-200 mt-2">
-                             <span>TOTAL</span>
-                             <span>$0.00</span>
-                         </div>
-                     </div>
+        {/* Right Sidebar - Only show when viewing rewards, not points history */}
+        {!showPointsHistory && (
+            <div className="w-80 bg-white rounded-2xl p-5 shadow flex flex-col border border-gray-100">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold text-brown-800">Reward details</h2>
+                    <button 
+                        onClick={() => setSelectedReward(null)}
+                        title="Close Details"
+                        className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center hover:bg-red-200 transition-colors">
+                        <img src="/src/assets/delete.svg" alt="Close Details" className="w-4 h-4" />
+                    </button>
+                </div>
 
-                     {/* Action Button - Updated onClick */}
-                      {(() => {
-                           const buttonProps = getButtonProps(selectedReward);
-                           const identifier = selectedReward.isVoucher ? selectedReward.instanceId : selectedReward.id;
-                           return (
+                {selectedReward && customerInfo ? (
+                    <>
+                        <div className="mb-4 border-b border-gray-100 pb-4">
+                            <p className="text-xs text-gray-500 mb-1">Customer</p>
+                            <p className="font-medium text-gray-800">{customerInfo.name} <span className="text-gray-400 text-xs">(ID: {customerInfo.id})</span></p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-4 text-sm">
+                            <div className="flex items-start gap-3 mb-3">
+                                <img src={selectedReward.image || '/src/assets/rewards.png'} alt={selectedReward.name} className="w-12 h-12 object-contain bg-gray-50 rounded-md p-1 border"/>
+                                <div className="flex-1">
+                                    <p className="text-md font-medium text-gray-800">{selectedReward.name}</p>
+                                    <p className={`text-sm font-medium ${selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher' ? 'text-green-600' : selectedReward.currentStatus === 'Claimed' ? 'text-blue-600' : 'text-gray-500'}`}>
+                                        {selectedReward.currentStatus.replace('ActiveVoucher', 'Active Voucher')}
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            {selectedReward.description && <DetailItem label="Description" value={selectedReward.description} />}
+                            <DetailItem label="Eligibility / Progress" value={selectedReward.progressMessage} />
+                            {selectedReward.isVoucher && selectedReward.instanceId && <DetailItem label="Voucher ID" value={selectedReward.instanceId} />}
+                            {selectedReward.pointsCost && !selectedReward.isVoucher && <DetailItem label="Cost to Redeem" value={`${selectedReward.pointsCost} points`} />}
+                            {selectedReward.type && <DetailItem label="Reward Type" value={selectedReward.type.replace('manual_grant', 'Manually Granted').replace('discount_coupon', 'Discount').replace('loyalty_tier_perk', 'Tier Perk')} />}
+                            {selectedReward.criteria?.minSpendPerTransaction && <DetailItem label="Min. Spend/Trans." value={`$${selectedReward.criteria.minSpendPerTransaction.toFixed(2)}`} />}
+                            {selectedReward.criteria?.cumulativeSpendTotal && <DetailItem label="Total Spend Required" value={`$${selectedReward.criteria.cumulativeSpendTotal.toFixed(2)}`} />}
+                        </div>
+
+                        {/* Totals Section (may not apply for free rewards) */}
+                        <div className="space-y-1 text-sm mb-4 border-t border-gray-100 pt-3">
+                            <div className="flex justify-between text-gray-600">
+                                <span>Subtotal</span>
+                                <span>$0.00</span>
+                            </div>
+                            <div className="flex justify-between font-semibold text-lg text-brown-900 pt-1 border-t border-gray-200 mt-2">
+                                <span>TOTAL</span>
+                                <span>$0.00</span>
+                            </div>
+                        </div>
+
+                        {/* Action Button - Updated onClick */}
+                        {(() => {
+                            const buttonProps = getButtonProps(selectedReward);
+                            const identifier = selectedReward.isVoucher ? selectedReward.instanceId : selectedReward.id;
+                            return (
                                 <button 
                                     onClick={(e) => {
-                                         e.stopPropagation();
-                                         if (selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher') {
+                                        e.stopPropagation();
+                                        if (selectedReward.currentStatus === 'Claim' || selectedReward.currentStatus === 'ActiveVoucher') {
                                             handleClaimReward(selectedReward.id, selectedReward.instanceId);
-                                         }
+                                        }
                                     }}
                                     className={`w-full py-3 rounded-xl text-white font-semibold text-md transition-colors ${buttonProps.className}`}
                                     disabled={buttonProps.disabled || isClaiming === identifier}
                                 >
                                     {isClaiming === identifier ? 'Processing...' : (selectedReward.currentStatus === 'Claim' ? 'Redeem Reward' : selectedReward.currentStatus === 'ActiveVoucher' ? 'Use Voucher' : buttonProps.text)}
                                 </button>
-                           );
-                      })()}
-                </> 
-            ) : (
-                 <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
-                     <img src="/src/assets/rewards.svg" alt="" className="w-16 h-16 mb-4 opacity-50" />
-                    <p>Select a reward from the list to view its details.</p>
-                </div>
-            )}
-        </div>
+                            );
+                        })()}
+                    </> 
+                ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
+                        <img src="/src/assets/rewards.svg" alt="" className="w-16 h-16 mb-4 opacity-50" />
+                        <p>Select a reward from the list to view its details.</p>
+                    </div>
+                )}
+            </div>
+        )}
     </div>
   );
 };

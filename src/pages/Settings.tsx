@@ -86,7 +86,15 @@ const Settings: React.FC<SettingsProps> = ({ user, updateUser }) => {
       }
       
       const userSettings = await response.json();
-      setSettings(userSettings);
+      // Merge with defaults to ensure all fields exist (especially profileBanner)
+      setSettings(prevSettings => ({
+        autoSave: userSettings.autoSave ?? prevSettings.autoSave,
+        theme: userSettings.theme ?? prevSettings.theme,
+        profileBanner: {
+          type: userSettings.profileBanner?.type ?? prevSettings.profileBanner.type,
+          value: userSettings.profileBanner?.value ?? prevSettings.profileBanner.value,
+        }
+      }));
     } catch (error: any) {
       console.error("Error fetching user settings:", error);
       setError(error.message || "Failed to fetch user settings.");
